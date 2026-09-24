@@ -42,5 +42,6 @@ include("xpub_presence_tests.jl")
 include("projects_config_tests.jl")
 include("extension_manager_tests.jl")
 include("headless_tty_tests.jl")
+include("send_restart_tests.jl")
 
 end # module
