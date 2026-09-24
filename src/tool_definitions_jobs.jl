@@ -98,7 +98,10 @@ cancel_eval_tool = @mcp_tool(
     :cancel_eval,
     """Cancel a running background job by eval ID.
 
-Sends a cancellation signal to the gate session and marks the job in the database.
+Sends a cancellation signal to the gate session and marks the job as
+cancel-requested in the database. The terminal status (completed/failed) is
+written only when the eval actually returns — a cooperative cancellation that
+finishes normally shows up as completed, with its result.
 Running code that calls `KaimonGate.is_cancelled()` in its loop will stop cooperatively.
 Julia doesn't support forced thread interruption, so cancellation is cooperative —
 the running code must check `KaimonGate.is_cancelled()` periodically.""",
@@ -123,8 +126,11 @@ the running code must check `KaimonGate.is_cancelled()` periodically.""",
             lock(mgr.eval_history_lock) do
                 for r in mgr.eval_history
                     if startswith(r.eval_id, eval_id) && r.status in (:running, :promoted)
-                        r.status = :cancelled
-                        r.finished_at = time()
+                        # Request-only status: the job has NOT stopped yet. The
+                        # collector task writes the terminal state (completed/
+                        # failed) when the eval actually returns, so the DB can
+                        # no longer claim 'cancelled' while code is still running.
+                        r.status = :cancel_requested
                         session_key = r.session_key
                     end
                 end
@@ -144,10 +150,11 @@ the running code must check `KaimonGate.is_cancelled()` periodically.""",
             end
         end
 
-        # Update database
-        Database.update_job!(eval_id; status="cancelled", cancelled=true, finished_at=time())
+        # Update database — request-only status, no finished_at: the job is
+        # still running until the collector observes its actual completion.
+        Database.update_job!(eval_id; status="cancel_requested")
 
-        "Job $eval_id marked as cancelled. Running code can check KaimonGate.is_cancelled() to stop cooperatively."
+        "Job $eval_id cancel requested. Running code can check KaimonGate.is_cancelled() to stop cooperatively; the job's terminal status is written once the eval actually returns."
     end
 )
 
