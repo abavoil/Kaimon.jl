@@ -13,7 +13,7 @@ mutable struct EvalRecord
     started_at::Float64       # time()
     finished_at::Float64      # 0.0 while running
     last_update::Float64      # time() of last stash/progress/stdout activity
-    status::Symbol            # :running, :completed, :failed, :timeout, :promoted
+    status::Symbol            # :running, :completed, :failed, :timeout, :promoted, :cancel_requested
     result_preview::String    # first 500 chars of formatted result (empty while running)
     full_result::String       # complete formatted result (stored for promoted jobs)
     promoted::Bool            # true if promoted to background job
