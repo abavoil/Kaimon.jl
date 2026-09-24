@@ -46,7 +46,10 @@ end
 @testset ":gate_request_id forwarded through call_on_backend" begin
     fb = fake_repl_backend()
     backend = REPL.REPLBackendRef(fb.repl_channel, fb.response_channel)
-    old_repl = Base.active_repl
+    # Base.active_repl is declared-but-unassigned until a real REPL starts;
+    # gate_eval guards with isdefined, so mirror that here.
+    had_repl = isdefined(Base, :active_repl)
+    old_repl = had_repl ? Base.active_repl : nothing
     # gate_eval detects the REPL via Base.active_repl + a .backendref property.
     Base.active_repl = (backendref = backend,)
     try
@@ -86,7 +89,7 @@ end
         end)
         @test KaimonGate.get_stash(rid)["k"] == 42
     finally
-        Base.active_repl = old_repl
+        Base.active_repl = had_repl ? old_repl : nothing
         put!(fb.repl_channel, (nothing, -1))
         wait(fb.task)
     end
