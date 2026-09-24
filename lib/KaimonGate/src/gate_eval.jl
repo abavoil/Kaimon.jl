@@ -61,8 +61,22 @@ function gate_eval(code::String; _mod::Module = Main, display_code::String = cod
         # via Threads.@spawn — call_on_backend would deadlock because the
         # REPL backend is occupied by the user's interactive session.
         on_interactive = Threads.threadpool(Threads.threadid()) === :interactive
+        # call_on_backend runs the closure on the REPL backend task, whose
+        # task-local storage is separate from this task's. Forward
+        # :gate_request_id so is_cancelled()/stash()/progress() keep binding
+        # to this job inside mt=true evals (the async-eval path sets it on
+        # the spawned task before calling gate_eval). The scoped form
+        # restores the backend task's own value afterwards.
+        rid = get(task_local_storage(), :gate_request_id, nothing)
+        _backend_eval = if rid === nothing
+            () -> _eval_with_capture(expr; mirror = mirror_owned)
+        else
+            () -> task_local_storage(:gate_request_id, rid) do
+                _eval_with_capture(expr; mirror = mirror_owned)
+            end
+        end
         result = if has_repl && on_interactive
-            r = REPL.call_on_backend(() -> _eval_with_capture(expr; mirror = mirror_owned), backend)
+            r = REPL.call_on_backend(_backend_eval, backend)
             # call_on_backend returns (value, iserr) Pair or NamedTuple
             r isa Pair ? r.first : (r isa Tuple && length(r) == 2 ? r[1] : r)
         else
