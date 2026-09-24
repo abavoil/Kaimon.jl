@@ -476,9 +476,13 @@ end
 
 Send a `:restart` command to the gate. Returns `true` if the gate acknowledged.
 The gate will exec a fresh Julia process after replying.
+
+Stalled sessions (no pong, e.g. a wedged backend) are accepted too — a
+restart is precisely the remedy for a session in that state; rejecting it
+forces the heavier shutdown + re-spawn path.
 """
 function send_restart!(conn::REPLConnection)
-    (conn.status ∉ (:connected, :evaluating) || conn.req_channel === nothing) && return false
+    (conn.status ∉ (:connected, :evaluating, :stalled) || conn.req_channel === nothing) && return false
     result = _req_send_recv(conn, (type = :restart, name = conn.name); caller_timeout = 10.0)
     return result.ok && get(result.response, :type, :error) == :ok
 end
