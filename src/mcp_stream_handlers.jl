@@ -357,6 +357,12 @@ function _stream_connect_tcp(http, req, body)
     return false
 end
 
+# Seconds of silence after which the GET stream writes an SSE comment. HTTP.jl's
+# server-side `isopen(stream)` stays true after the peer disconnects, so a write is
+# the only way to notice a client that has gone; without one the loop — and its
+# socket — lives for the rest of the server's lifetime.
+const _SSE_KEEPALIVE_SECS = Ref(15.0)
+
 function _stream_get_sse(http, req)
             if req.method == "GET" && (
                 req.target == "/mcp" ||
@@ -378,11 +384,17 @@ function _stream_get_sse(http, req)
                     @async try; _capture_roots!(sid); catch; end
                 end
                 try
+                    last_write = time()
                     while isopen(http)
+                        # A newer GET stream for this session closed our outbox when it
+                        # registered its own; this one has been replaced, so end it.
+                        outbox === nothing || isopen(outbox) || break
+                        wrote = false
                         # Targeted server→client messages (e.g. roots/list) first.
                         if outbox !== nothing
                             while isready(outbox)
                                 write(http, "data: $(JSON.json(take!(outbox)))\n\n")
+                                wrote = true
                             end
                         end
                         # Notifications newer than this session's cursor. The cursor
@@ -392,8 +404,16 @@ function _stream_get_sse(http, req)
                         # instead of being suppressed for the stream's whole life.
                         for notif in _flush_notifications_for_session!(sid)
                             write(http, "data: $(JSON.json(notif))\n\n")
+                            wrote = true
                         end
-                        flush(http)
+                        if !wrote && time() - last_write >= _SSE_KEEPALIVE_SECS[]
+                            write(http, ": keepalive\n\n")
+                            wrote = true
+                        end
+                        if wrote
+                            flush(http)
+                            last_write = time()
+                        end
                         sleep(1)
                     end
                 catch
