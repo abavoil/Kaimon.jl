@@ -995,9 +995,11 @@ Call with no `project_path` to list allowed projects and their status.""",
         # Any MANAGED_SESSIONS entry for this path is stale at this point — a live
         # gate would have been caught by the connection-manager check above — so
         # drop it and respawn fresh. This closes the phantom "already running" gap
-        # where a dead managed entry's key was handed back (issue #55).
+        # where a dead managed entry's key was handed back (issue #55). Stop it first:
+        # its process is either dead and needs reaping, or never connected.
         existing = find_managed_session(path)
         if existing !== nothing
+            stop_session!(existing)
             lock(MANAGED_SESSIONS_LOCK) do
                 filter!(ms -> ms !== existing, MANAGED_SESSIONS)
             end
