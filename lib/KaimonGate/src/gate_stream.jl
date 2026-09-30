@@ -623,6 +623,17 @@ function Base.unsafe_write(io::_CaptureIO, p::Ptr{UInt8}, n::UInt)
     return Int(n)
 end
 
+# `redirect_stdout(f, io)` / `redirect_stderr(f, io)` save the current stream and hand it
+# back to the redirector once `f` returns. With the mux installed that saved stream is a
+# `_CaptureIO`, which Base can't redirect to, so restore the real stream underneath it
+# (which puts the file descriptor back) and then reinstall the mux.
+function (r::Base.RedirectStdStream)(io::_CaptureIO)
+    r(io.orig)
+    r.unix_fd == 1 && setglobal!(Base, :stdout, io)
+    r.unix_fd == 2 && setglobal!(Base, :stderr, io)
+    return io
+end
+
 function _eval_with_capture(expr; mirror::Bool = false)
     _ensure_capture_installed!()
     sink = _EvalSink(;

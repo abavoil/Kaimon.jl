@@ -193,3 +193,27 @@ end
         KaimonGate._UNCAPTURE_DEPTH[] = 0
     end
 end
+
+@testset "redirect_stdout/stderr(f, io) restores the capture" begin
+    KaimonGate._ensure_capture_installed!()
+    try
+        mux_out, mux_err = stdout, stderr
+        @test mux_out isa KaimonGate._CaptureIO
+
+        path = tempname()
+        open(path, "w") do file
+            redirect_stdout(() -> (print("to file"); flush(stdout)), file)
+        end
+        @test read(path, String) == "to file"
+        @test stdout === mux_out
+
+        redirect_stderr(() -> print(stderr, "gone"), devnull)
+        @test stderr === mux_err
+
+        # Output after the redirect is captured again, not lost in the redirect target.
+        r = KaimonGate._eval_with_capture(:(print("after")))
+        @test r.stdout == "after"
+    finally
+        KaimonGate._restore_capture!()
+    end
+end
