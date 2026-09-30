@@ -540,9 +540,13 @@ end
 # the key handler's bounds, and the rendered rows can't drift apart.
 const LAUNCH_CONFIG_FIELDS =
     [:threads, :gcthreads, :heap_size_hint, :sysimage, :julia_bin, :julia_version,
-     :startup_file, :extra_flags]
+     :startup_file, :instantiate, :extra_flags]
 const LAUNCH_CONFIG_LABELS = ["Threads (-t):", "GC threads:", "Heap size hint:",
-    "Sysimage (-J):", "Julia binary:", "Julia version:", "Run startup.jl:", "Extra flags:"]
+    "Sysimage (-J):", "Julia binary:", "Julia version:", "Run startup.jl:",
+    "Pkg.instantiate:", "Extra flags:"]
+
+# Values a choice row cycles through with Space. "" inherits (kaimon.toml, else the default).
+const LAUNCH_CONFIG_CHOICES = Dict(:instantiate => ["", INSTANTIATE_MODES...])
 
 function _render_launch_config_modal(m::KaimonModel, buf::Buffer, area::Rect)
     idx = m.selected_project
@@ -602,6 +606,9 @@ function _render_launch_config_modal(m::KaimonModel, buf::Buffer, area::Rect)
         if input isa Bool
             set_string!(buf, x + 2 + label_w, y, input ? "[x] yes" : "[ ] no",
                         selected ? tstyle(:accent) : tstyle(:text))
+        elseif input isa String
+            set_string!(buf, x + 2 + label_w, y, "‹ $(isempty(input) ? "default (auto)" : input) ›",
+                        selected ? tstyle(:accent) : tstyle(:text))
         else
             if selected
                 input.tick = m.tick
@@ -613,7 +620,7 @@ function _render_launch_config_modal(m::KaimonModel, buf::Buffer, area::Rect)
 
     y += 1
     if y <= bottom(inner)
-        set_string!(buf, x, y, "[Space] toggle  [Enter] Save  [Esc] Cancel", tstyle(:text_dim))
+        set_string!(buf, x, y, "[Space] toggle/cycle  [Enter] Save  [Esc] Cancel", tstyle(:text_dim))
     end
 end
 

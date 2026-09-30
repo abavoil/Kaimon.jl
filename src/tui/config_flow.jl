@@ -40,6 +40,7 @@ function begin_project_edit_launch!(m::KaimonModel)
         :julia_bin => TextInput(text = lc.julia_bin, label = "", tick = m.tick),
         :julia_version => TextInput(text = lc.julia_version, label = "", tick = m.tick),
         :startup_file => lc.startup_file,   # Bool — a toggle row, not a text field
+        :instantiate => lc.instantiate,     # String — a choice row (LAUNCH_CONFIG_CHOICES)
     )
     m.launch_config_selected = 1
     m.config_flow = FLOW_PROJECT_EDIT_LAUNCH
@@ -281,6 +282,13 @@ function handle_flow_input!(m::KaimonModel, evt::KeyEvent)
                     # Toggle rows have no text to edit — space flips them
                     evt.key == :char && evt.char == ' ' &&
                         (m.launch_config_inputs[active_key] = !active_input)
+                elseif active_input isa String
+                    # Choice rows — space moves to the next value
+                    if evt.key == :char && evt.char == ' '
+                        opts = LAUNCH_CONFIG_CHOICES[active_key]
+                        i = something(findfirst(==(active_input), opts), 0)
+                        m.launch_config_inputs[active_key] = opts[mod1(i + 1, length(opts))]
+                    end
                 else
                     active_input.tick = m.tick
                     handle_key!(active_input, evt)
@@ -448,9 +456,10 @@ function execute_project_edit_launch!(m::KaimonModel)
         julia_bin = strip(Tachikoma.text(m.launch_config_inputs[:julia_bin]))
         julia_version = strip(Tachikoma.text(m.launch_config_inputs[:julia_version]))
         startup_file = m.launch_config_inputs[:startup_file] === true
+        instantiate = String(m.launch_config_inputs[:instantiate])
 
         lc = LaunchConfig(threads, gcthreads, heap, extra, sysimage, julia_bin, startup_file,
-                          julia_version)
+                          julia_version, instantiate)
         old = entries[idx]
         entries[idx] = ProjectEntry(old.project_path, old.enabled, lc)
         save_projects_config(entries)

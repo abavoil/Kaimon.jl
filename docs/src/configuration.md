@@ -155,7 +155,14 @@ How Kaimon starts a managed session for a project — most importantly, which **
 | `gcthreads` | `--gcthreads` value |
 | `heap_size_hint` | `--heap-size-hint` value, e.g. `8G` |
 | `startup_file` | Run `~/.julia/config/startup.jl`. Default `false` |
+| `instantiate` | `Pkg.instantiate` before the session connects: `"auto"`, `"always"` or `"never"` (`true`/`false` also work). Default `"auto"` |
 | `extra_flags` | Any further Julia flags, passed through verbatim |
+
+#### Instantiating the environment
+
+A spawned session runs `Pkg.instantiate` before it connects, so an environment that isn't installed yet still boots. By default (`"auto"`) this runs with Pkg's automatic precompilation turned off: missing packages are installed, and packages compile when the session loads them. Precompiling the whole manifest at each spawn would recompile every stale package in it, including dev'd packages that the session never loads and ones that currently fail to build.
+
+`"always"` precompiles the whole manifest as well. `"never"` skips `Pkg.instantiate`, for an environment you manage by hand. Its output, including any failure, goes to the session log; a failure does not stop the session from connecting.
 
 #### Requesting a Julia version
 

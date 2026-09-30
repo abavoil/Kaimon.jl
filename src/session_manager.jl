@@ -47,13 +47,16 @@ end
 # ── Spawn / Stop ─────────────────────────────────────────────────────────────
 
 """
-    _build_session_script(project_path; name="") -> String
+    _build_session_script(project_path; name="", allow_restart=true, instantiate="auto") -> String
 
-Generate the Julia `-e` script that boots a session subprocess.
+Generate the Julia `-e` script that boots a session subprocess. `instantiate` is the launch
+config mode (see `LaunchConfig`); its output goes to the session log, and a failure is
+reported there without stopping the session from connecting.
 """
 function _build_session_script(project_path::String;
                                name::String = "",
-                               allow_restart::Bool = true)
+                               allow_restart::Bool = true,
+                               instantiate::String = "auto")
     # The subprocess is launched with --project=<target>, so the target project
     # and its deps are the active environment. It boots only the lightweight
     # `KaimonGate` (ZMQ + stdlib) — NOT the heavyweight Kaimon — so a session
@@ -65,9 +68,18 @@ function _build_session_script(project_path::String;
     cd($(repr(project_path)))
     try; using Revise; catch; end
     using KaimonGate
-    import Pkg; Pkg.instantiate(; io=devnull)
+    $(_instantiate_line(instantiate))
     @async KaimonGate.serve(force=true, allow_mirror=true, allow_restart=$(allow_restart), spawned_by="agent")
     """
+end
+
+# The script line for a launch config `instantiate` mode. "auto" turns off Pkg's automatic
+# precompilation for the call: every stale package in the manifest would otherwise be
+# compiled at each spawn, including dev'd packages the session never loads.
+function _instantiate_line(mode::AbstractString)
+    mode == "never" && return ""
+    call = mode == "always" ? "Pkg.instantiate()" : "Pkg.instantiate(; allow_autoprecomp = false)"
+    return "import Pkg; try; $call; catch e; @error \"Pkg.instantiate failed\" exception = e; end"
 end
 
 """
@@ -248,10 +260,10 @@ function spawn_session!(ms::ManagedSession)
         v = resolve_session_pref(sp, ms.project_path, :allow_restart)
         v !== nothing ? v : true  # default: restart allowed
     end
-    script = _build_session_script(ms.project_path; name = ms.name, allow_restart = ar)
-
     try
         lc = _resolve_launch_config(ms.project_path)
+        script = _build_session_script(ms.project_path; name = ms.name, allow_restart = ar,
+                                       instantiate = isempty(lc.instantiate) ? "auto" : lc.instantiate)
         cmd = _build_julia_cmd(lc, script; project = ms.project_path)
         # Build the env overlay: --project=<target> controls the active
         # environment, KaimonGate's own env is appended to JULIA_LOAD_PATH so the
