@@ -31,29 +31,29 @@ interactive. Good for one-off connections or scripts.
 
 ### Per-project auto-connect
 
-The Config tab's onboarding flow writes a `.julia-startup.jl` file into your
-project directory. Load it with Julia's `--load=` flag and the REPL auto-connects whenever
-it launches in that directory:
+`Kaimon.Generate.create_startup_script(path)` writes a `.julia-startup.jl` file into a
+project directory, and `Kaimon.Generate.create_repl_script(path)` an executable `repl`
+launcher that loads it. Start the REPL through `./repl`, or with Julia's `--load=` flag:
 
 ```bash
-julia --load=.julia-startup.jl
+julia --project --load=.julia-startup.jl
 ```
 
-The generated file loads Revise and calls `KaimonGate.serve()`, both wrapped in
-`try/catch` so startup succeeds even when Kaimon is not running:
+The generated file loads Revise and calls `KaimonGate.serve()` when KaimonGate is available
+in the environment, so startup succeeds even when Kaimon is not running:
 
 ```julia
-# .julia-startup.jl
-try
-    using Revise
-catch e
-    @info "ℹ Revise not loaded (optional)"
-end
-try
-    using KaimonGate
-    KaimonGate.serve()
-catch e
-    @warn "KaimonGate failed to start" exception = e
+if Base.identify_package("KaimonGate") !== nothing
+    try
+        @eval using Revise
+    catch
+    end
+    try
+        @eval using KaimonGate
+        @eval KaimonGate.serve()
+    catch e
+        @warn "KaimonGate failed to start" exception = e
+    end
 end
 ```
 
