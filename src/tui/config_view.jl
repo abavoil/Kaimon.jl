@@ -144,6 +144,15 @@ function view_config_base(m::KaimonModel, area::Rect, buf::Buffer)
         ps_note = haskey(ENV, "KAIMON_PRINT_STRIP") ? " (KAIMON_PRINT_STRIP)" : ""
         ps_style = ps === :off ? tstyle(:warning) : tstyle(:success)
         set_string!(buf, x + 4, y, "level: $ps$ps_note", ps_style; max_x=arx)
+        y += 1
+        # Row 13: [a] Agent session sharing
+        set_string!(buf, x, y, "[a]", tstyle(:accent, bold = true); max_x=arx)
+        set_string!(buf, x + 4, y, "Agent sessions (start_session)", tstyle(:text); max_x=arx)
+        y += 1
+        as = agent_sessions_mode()
+        as_note = haskey(ENV, "KAIMON_AGENT_SESSIONS") ? " (KAIMON_AGENT_SESSIONS)" : ""
+        as_label = as === :private ? "private per agent" : "shared per project"
+        set_string!(buf, x + 4, y, "mode: $as_label$as_note", tstyle(:success); max_x=arx)
     end
 
     # ── Right column: MCP Clients (top) + Projects & TCP Gates side-by-side (bottom) ──

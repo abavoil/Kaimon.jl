@@ -143,7 +143,7 @@ The global gate option (`g`) appends the gate snippet to `~/.julia/config/startu
 
 ![Global gate](./assets/kaimon_startup_global.gif)
 
-Press `o` to cycle how much agent print output is removed from evals (`off`, `moderate`, `high`); see [Print Stripping](@ref print-strip).
+Press `o` to cycle how much agent print output is removed from evals (`off`, `moderate`, `high`); see [Print Stripping](@ref print-strip). Press `a` to choose whether agents share one session per project or get their own; see [Private sessions](sessions.md#Private-sessions).
 
 The Config tab also manages the **allowed projects list** for managed sessions. Add projects here to enable AI agents to spawn sessions via the `start_session` tool. See [Projects Configuration](configuration.md#projects-configuration) for the file format.
 

@@ -9,6 +9,7 @@ Kaimon uses [Preferences.jl](https://github.com/JuliaPackaging/Preferences.jl) f
 | Preference | Type | Description |
 |------------|------|-------------|
 | `gate_mirror_repl` | `Bool` | Mirror eval output from MCP agents into the host REPL. Useful for seeing what agents are executing in real time. |
+| `agent_sessions` | `String` | `"shared"` (default): `start_session` returns the session already running for a project. `"private"`: each MCP client gets its own. Toggle with `[a]` in the Config tab. See [Private sessions](sessions.md#Private-sessions). |
 | `print_strip` | `String` | How much output-producing code is removed from agent evals: `"off"`, `"moderate"` (default) or `"high"`. Cycle it with `[o]` in the Config tab. See [Print Stripping](@ref print-strip). |
 
 Layout preferences for TUI panels (sizes, positions, visibility) are also persisted through the Preferences system.
@@ -281,6 +282,7 @@ that is nearly always a typo in a tool name.
 | `APPDATA` | Windows | Windows config directory. Kaimon stores config in `$APPDATA/Kaimon/`. |
 | `XDG_CACHE_HOME` | Linux/macOS | Override the default cache directory (`~/.cache`). Kaimon stores data in `$XDG_CACHE_HOME/kaimon/`. |
 | `LOCALAPPDATA` | Windows | Windows equivalent of the cache directory. Kaimon stores data in `$LOCALAPPDATA/Kaimon/`. |
+| `KAIMON_AGENT_SESSIONS` | all | `shared` or `private`. Overrides the `agent_sessions` preference. |
 | `KAIMON_PRINT_STRIP` | all | `off`, `moderate` or `high`. Overrides the `print_strip` preference. See [Print Stripping](@ref print-strip). |
 | `KAIMON_TEST_PROMOTE_AFTER` | all | Seconds a test run may hold the foreground before `run_tests` backgrounds it (default `30`). `0` never backgrounds. |
 | `KAIMON_TEST_CONCURRENCY` | all | Test runs allowed in flight per project (default `1`). Runs are serialised because overlapping suites share fixtures and global state. |

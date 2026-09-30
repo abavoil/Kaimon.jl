@@ -7,6 +7,10 @@
     ManagedSession
 
 Tracks the lifecycle of a managed session subprocess spawned by an agent.
+
+`owner` is the MCP session id of the agent that started it privately (see `start_session`'s
+`private`), or `""` for a shared session. A private session is never handed to another agent
+by `start_session` or picked for it by automatic binding.
 """
 mutable struct ManagedSession
     project_path::String
@@ -18,16 +22,18 @@ mutable struct ManagedSession
     session_key::String     # gate session key once connected (8-char)
     error_log::Vector{String}
     log_file::String        # path to stderr/stdout log
+    owner::String           # MCP caller that owns it privately; "" = shared
 end
 
-function ManagedSession(project_path::String; name::String = "")
+function ManagedSession(project_path::String; name::String = "", owner::String = "")
     if isempty(name)
-        name = basename(project_path)
+        name = isempty(owner) ? basename(project_path) : "$(basename(project_path)) (private)"
     end
     log_dir = joinpath(kaimon_cache_dir(), "sessions")
     mkpath(log_dir)
-    log_file = joinpath(log_dir, "$(basename(project_path)).log")
-    ManagedSession(project_path, name, nothing, nothing, :stopped, 0.0, "", String[], log_file)
+    stem = isempty(owner) ? basename(project_path) : "$(basename(project_path))-$(first(owner, 8))"
+    log_file = joinpath(log_dir, "$stem.log")
+    ManagedSession(project_path, name, nothing, nothing, :stopped, 0.0, "", String[], log_file, owner)
 end
 
 """Return the PID of a managed session (from PTY or Process)."""
@@ -471,27 +477,34 @@ function _monitor_managed_sessions!(conn_mgr)
         end
 
         if ms.status == :starting
-            # Look for a matching gate session by project_path
+            # Match the gate that connected for this process. Several sessions can share
+            # a project, so the process id decides; the project path is the fallback for
+            # a `julia_bin` wrapper that runs Julia as a child (a different pid). A gate
+            # another managed session already claimed is never matched twice.
+            claimed = Set(s.session_key for s in sessions if s !== ms && !isempty(s.session_key))
+            pid = session_pid(ms)
             norm_path = try
                 realpath(ms.project_path)
             catch
                 ms.project_path
             end
-            for conn in conns
-                conn_norm = try
-                    realpath(conn.project_path)
-                catch
-                    conn.project_path
-                end
-                if conn_norm == norm_path && is_agent_spawned(conn)
-                    ms.status = :running
-                    ms.session_key = short_key(conn)
-                    _push_log!(
-                        :info,
-                        "Session '$(ms.name)' connected (session=$(ms.session_key))",
-                    )
-                    break
-                end
+            other_pids = Set(session_pid(s) for s in sessions if s !== ms)
+            path_match(conn) = !(conn.pid in other_pids) &&
+                (try realpath(conn.project_path) catch; conn.project_path end) == norm_path
+            candidates = [c for c in conns if is_agent_spawned(c) && !(short_key(c) in claimed)]
+            match = something(
+                findfirst(c -> pid > 0 && c.pid == pid, candidates),
+                findfirst(path_match, candidates),
+                Some(nothing),
+            )
+            if match !== nothing
+                conn = candidates[match]
+                ms.status = :running
+                ms.session_key = short_key(conn)
+                _push_log!(
+                    :info,
+                    "Session '$(ms.name)' connected (session=$(ms.session_key))",
+                )
             end
 
             # Timeout: if starting for >120s, mark as crashed
@@ -516,11 +529,12 @@ function get_managed_sessions()
 end
 
 """
-    find_managed_session(project_path::String) -> Union{ManagedSession,Nothing}
+    find_managed_session(project_path::String; owner=nothing) -> Union{ManagedSession,Nothing}
 
-Find a managed session by project path (normalized).
+Find a managed session by project path (normalized). With `owner`, only a session with
+exactly that owner (`""` = shared) matches.
 """
-function find_managed_session(project_path::String)
+function find_managed_session(project_path::String; owner::Union{String,Nothing} = nothing)
     norm_path = try
         realpath(project_path)
     catch
@@ -530,6 +544,7 @@ function find_managed_session(project_path::String)
         copy(MANAGED_SESSIONS)
     end
     for ms in sessions
+        owner === nothing || ms.owner == owner || continue
         ms_norm = try
             realpath(ms.project_path)
         catch
@@ -539,3 +554,25 @@ function find_managed_session(project_path::String)
     end
     return nothing
 end
+
+"""Find the managed session connected as gate session `key`, or `nothing`."""
+function find_managed_by_key(key::AbstractString)
+    isempty(key) && return nothing
+    lock(MANAGED_SESSIONS_LOCK) do
+        for ms in MANAGED_SESSIONS
+            ms.session_key == key && return ms
+        end
+        return nothing
+    end
+end
+
+"""The MCP caller that owns gate session `key` privately, or `""` if it is shared (or not
+an agent-spawned session at all)."""
+function session_owner(key::AbstractString)
+    ms = find_managed_by_key(key)
+    return ms === nothing ? "" : ms.owner
+end
+
+"""True when gate session `key` is private to an agent other than `caller`."""
+private_to_other(key::AbstractString, caller::AbstractString) =
+    (o = session_owner(key); !isempty(o) && o != caller)

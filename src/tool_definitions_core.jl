@@ -190,6 +190,8 @@ ping_tool = @mcp_tool(
                 else
                     ", free"
                 end
+                owner = session_owner(key)
+                isempty(owner) || (extra *= owner == _current_mcp_caller() ? ", private to you" : ", private to another agent")
                 mine = (!isempty(bound_key) && key == bound_key) ?
                     "  ← your session (default for unscoped tools/search; override with ses=)" : ""
                 status *= "\n  $icon $key $dname ($(conn.status), up $(uptime_str), PID $(conn.pid)$tools_info$extra)$mine"
@@ -474,7 +476,7 @@ mt=true: routes eval through the REPL backend (thread 1). ALWAYS use mt=true for
             ),
             "ses" => Dict(
                 "type" => "string",
-                "description" => "Session key (8-char ID from resources/list). Required when multiple sessions are connected.",
+                "description" => "Session key (8-char ID from ping or start_session). Defaults to the session you're bound to (marked in ping), else the only connected session.",
             ),
             "mt" => Dict(
                 "type" => "boolean",
@@ -556,7 +558,7 @@ Commands:
             ),
             "session" => Dict(
                 "type" => "string",
-                "description" => "Session key (8-char ID). Required when multiple sessions are connected.",
+                "description" => "Session key (8-char ID from ping or start_session). Defaults to the session you're bound to (marked in ping), else the only connected session.",
             ),
         ),
         "required" => ["command"],
@@ -898,7 +900,14 @@ in the allowed-projects list (configured in the TUI Config tab or
 ~/.config/kaimon/projects.json).
 
 Returns the 8-character session key on success, which can be used with
-other tools (ex, run_tests, etc.) via the `session` parameter.
+other tools (ex, run_tests, etc.) via the `ses` parameter. You are bound to the
+session it returns, so tools default to it when you omit `ses`.
+
+If a session is already running for the project, you get that one, and its REPL
+state is shared with whoever else uses it. Pass `private=true` for a session of
+your own that no other agent is handed (e.g. one per subagent working in
+parallel, with each subagent passing its own key as `ses`). The user can make
+private the default in the Config tab.
 
 Call with no `project_path` to list allowed projects and their status.""",
     Dict(
@@ -912,12 +921,22 @@ Call with no `project_path` to list allowed projects and their status.""",
                 "type" => "string",
                 "description" => "Optional display name for the session (defaults to project directory name)",
             ),
+            "private" => Dict(
+                "type" => "boolean",
+                "description" => "Start (or return) a session of your own instead of sharing the one already running for this project. Default: the user's Config-tab setting (shared unless they chose private).",
+            ),
         ),
         "required" => [],
     ),
     (args) -> begin
         raw_path = get(args, "project_path", "")
         name = get(args, "name", "")
+        caller = _current_mcp_caller()
+        private = let v = get(args, "private", nothing)
+            v === nothing ? agent_sessions_mode() === :private : (v === true || v == "true")
+        end
+        # A caller-less call (REPL/self) has nobody to own a session, so it is shared.
+        owner = private ? caller : ""
 
         # No path → list allowed projects
         if isempty(raw_path)
@@ -929,12 +948,13 @@ Call with no `project_path` to list allowed projects and their status.""",
                 status = if !entry.enabled
                     "disabled"
                 else
-                    ms = find_managed_session(entry.project_path)
-                    if ms !== nothing && ms.status == :running && !isempty(ms.session_key)
-                        "running (session: $(ms.session_key))"
-                    else
-                        "ready"
-                    end
+                    norm = normalize_path(entry.project_path)
+                    running = [ms for ms in managed if ms.status == :running &&
+                               !isempty(ms.session_key) && normalize_path(ms.project_path) == norm]
+                    isempty(running) ? "ready" :
+                        "running (" * join(["session: $(ms.session_key)" *
+                            (isempty(ms.owner) ? "" : ms.owner == caller ? ", private to you" : ", private")
+                            for ms in running], "; ") * ")"
                 end
                 push!(lines, "  $(entry.project_path)  [$status]")
             end
@@ -949,19 +969,24 @@ Call with no `project_path` to list allowed projects and their status.""",
         isfile(joinpath(path, "Project.toml")) ||
             return "Error: No Project.toml found in $path"
 
-        # Converge with any gate already connected for this project — whether
-        # started manually via Gate.serve() or by a previous start_session —
-        # instead of spawning a duplicate. This is the authoritative, live check
-        # (the MANAGED_SESSIONS registry below tracks only agent-spawned sessions
-        # and can go stale). No spawn happens here, so no allow-list consent is
-        # needed: the session already exists, we're just handing back its key.
+        # Converge with a gate already connected for this project — whether started
+        # manually via Gate.serve() or by a previous start_session — instead of spawning
+        # a duplicate. This is the authoritative, live check (the MANAGED_SESSIONS
+        # registry below tracks only agent-spawned sessions and can go stale). No spawn
+        # happens here, so no allow-list consent is needed. A private request only
+        # converges on the caller's own private session; a shared one never lands on
+        # another agent's private session.
         let mgr = GATE_CONN_MGR[]
             if mgr !== nothing
                 for conn in connected_sessions(mgr)
                     isempty(conn.project_path) && continue
-                    if normalize_path(conn.project_path) == path
-                        return "Session already running for this project (session key: $(short_key(conn)))."
-                    end
+                    normalize_path(conn.project_path) == path || continue
+                    key = short_key(conn)
+                    session_owner(key) == owner || continue
+                    _bind_caller_session!(key)
+                    return private ?
+                        "Your private session for this project is already running (session key: $key)." :
+                        "Session already running for this project (session key: $key)."
                 end
             end
         end
@@ -997,7 +1022,7 @@ Call with no `project_path` to list allowed projects and their status.""",
         # drop it and respawn fresh. This closes the phantom "already running" gap
         # where a dead managed entry's key was handed back (issue #55). Stop it first:
         # its process is either dead and needs reaping, or never connected.
-        existing = find_managed_session(path)
+        existing = find_managed_session(path; owner = owner)
         if existing !== nothing
             stop_session!(existing)
             lock(MANAGED_SESSIONS_LOCK) do
@@ -1006,7 +1031,7 @@ Call with no `project_path` to list allowed projects and their status.""",
         end
 
         # Create and spawn
-        ms = ManagedSession(path; name = isempty(name) ? "" : name)
+        ms = ManagedSession(path; name = isempty(name) ? "" : name, owner = owner)
         lock(MANAGED_SESSIONS_LOCK) do
             push!(MANAGED_SESSIONS, ms)
         end
@@ -1022,7 +1047,10 @@ Call with no `project_path` to list allowed projects and their status.""",
                 _monitor_managed_sessions!(mgr)
             end
             if ms.status == :running && !isempty(ms.session_key)
-                return "Session started. Session key: $(ms.session_key)"
+                _bind_caller_session!(ms.session_key)
+                return private && !isempty(owner) ?
+                    "Private session started. Session key: $(ms.session_key). No other agent is handed this session; pass it as ses (tools default to it when you omit ses)." :
+                    "Session started. Session key: $(ms.session_key)"
             end
             if ms.status == :crashed
                 err_msg = isempty(ms.error_log) ? "unknown error" : last(ms.error_log)

@@ -449,7 +449,7 @@ function _shutdown_selected_session!(m::KaimonModel)
     Threads.@spawn begin
         send_shutdown!(conn)
         if is_agent_spawned(conn)
-            ms = find_managed_session(conn.project_path)
+            ms = something(find_managed_by_key(short_key(conn)), find_managed_session(conn.project_path), Some(nothing))
             ms !== nothing && stop_session!(ms)
         end
     end

@@ -340,6 +340,18 @@ function _bind_caller_session!(gate_key::AbstractString)
     return nothing
 end
 
+"""The connected session `caller` is bound to, or `nothing` (no caller, no binding, or the
+bound session is gone)."""
+function _caller_bound_conn(mgr, caller::AbstractString)
+    isempty(caller) && return nothing
+    key = lock(STANDALONE_SESSIONS_LOCK) do
+        s = get(STANDALONE_SESSIONS, String(caller), nothing)
+        s === nothing ? "" : something(s.target_julia_session_id, "")
+    end
+    isempty(key) && return nothing
+    return get_connection_by_key(mgr, key)
+end
+
 """Project path for the calling agent's default session. Resolution order:
 1. explicit/auto binding on the caller's MCP session (`target_julia_session_id`),
 2. workspace root captured from the caller's MCP `roots`,
@@ -390,18 +402,24 @@ function _root_uri_to_path(uri)
 end
 
 """Match a captured workspace root to a connected gate and bind the caller to it
-(longest project_path that is `root` or an ancestor of it wins)."""
+(longest project_path that is `root` or an ancestor of it wins; among equals, the caller's
+own private session). Sessions another agent started privately are never picked."""
 function _bind_caller_to_project!(caller::AbstractString, project_path::AbstractString)
     mgr = GATE_CONN_MGR[]
     mgr === nothing && return
     proj = rstrip(String(project_path), '/')
     best = nothing
+    best_rank = (0, false)
     for c in connected_sessions(mgr)
         isempty(c.project_path) && continue
+        key = short_key(c)
+        private_to_other(key, caller) && continue
         cp = rstrip(c.project_path, '/')
         if cp == proj || startswith(proj, cp * "/")
-            (best === nothing || length(rstrip(best.project_path, '/')) < length(cp)) &&
-                (best = c)
+            rank = (length(cp), session_owner(key) == caller)
+            if best === nothing || rank > best_rank
+                best, best_rank = c, rank
+            end
         end
     end
     best === nothing && return
@@ -486,11 +504,16 @@ function _resolve_gate_conn(session::String; allow_stalled::Bool = false)
     end
 
     conn = if isempty(session)
-        conns = connected_sessions(mgr)
-        if length(conns) == 1
-            conns[1]
+        # No `ses`: the caller's bound session (set by its `ses=`, its start_session, or
+        # its workspace root), else the only connected session — but never a session
+        # another agent started privately.
+        caller = _current_mcp_caller()
+        bound = _caller_bound_conn(mgr, caller)
+        if bound !== nothing
+            bound
         else
-            nothing
+            conns = [c for c in connected_sessions(mgr) if !private_to_other(short_key(c), caller)]
+            length(conns) == 1 ? conns[1] : nothing
         end
     else
         get_connection_by_key(mgr, session)

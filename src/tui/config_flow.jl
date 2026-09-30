@@ -492,6 +492,15 @@ function cycle_print_strip!(m::KaimonModel)
     _push_log!(:info, msg)
 end
 
+function cycle_agent_sessions!(m::KaimonModel)
+    m._render_mode && return
+    next = get_agent_sessions_preference() === :shared ? :private : :shared
+    set_agent_sessions_preference!(next)
+    msg = "Agent sessions set to $next"
+    haskey(ENV, "KAIMON_AGENT_SESSIONS") && (msg *= " (KAIMON_AGENT_SESSIONS=$(ENV["KAIMON_AGENT_SESSIONS"]) still overrides it)")
+    _push_log!(:info, msg)
+end
+
 function toggle_gate_mirror_repl!(m::KaimonModel)
     m._render_mode && return
     new_value = !m.gate_mirror_repl
