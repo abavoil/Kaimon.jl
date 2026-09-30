@@ -634,6 +634,29 @@ function (r::Base.RedirectStdStream)(io::_CaptureIO)
     return io
 end
 
+# A `using`/`import` triggers precompilation, whose progress bar and failed-task notices are
+# written as raw bytes through Base.stdout/stderr and would crash the `_CaptureIO` mux (see
+# _with_uncaptured_streams), so a statement that loads packages runs with the real streams.
+# A cell is evaluated statement by statement when it has one, so only that statement's
+# output escapes the eval's result. Top-level statements run in order with the world age
+# advancing between them, so evaluating them one at a time doesn't change what they do.
+function _eval_cell(expr)
+    _expr_uses_packages(expr) || return Core.eval(Main, expr)
+    stmts = expr isa Expr && expr.head === :toplevel ? expr.args : Any[expr]
+    value = nothing
+    line = nothing
+    for s in stmts
+        if s isa LineNumberNode
+            line = s
+            continue
+        end
+        ex = line === nothing ? Expr(:toplevel, s) : Expr(:toplevel, line, s)
+        value = _expr_uses_packages(s) ?
+            _with_uncaptured_streams(() -> Core.eval(Main, ex)) : Core.eval(Main, ex)
+    end
+    return value
+end
+
 function _eval_with_capture(expr; mirror::Bool = false)
     _ensure_capture_installed!()
     sink = _EvalSink(;
@@ -663,17 +686,7 @@ function _eval_with_capture(expr; mirror::Bool = false)
         end
         # Blank-session convenience: import qualified package refs before evaluating.
         autoimported = _autoimport!(expr)
-        # A top-level `using`/`import` triggers precompilation, whose progress bar and
-        # failed-task notices are written as raw bytes through Base.stdout/stderr and
-        # would crash the `_CaptureIO` mux (see _with_uncaptured_streams). Run those
-        # evals with the real fd-backed streams restored so loading is byte-safe.
-        value = if _expr_uses_packages(expr)
-            _with_uncaptured_streams() do
-                Core.eval(Main, expr)
-            end
-        else
-            Core.eval(Main, expr)
-        end
+        value = _eval_cell(expr)
     catch e
         caught = e
         bt = catch_backtrace()

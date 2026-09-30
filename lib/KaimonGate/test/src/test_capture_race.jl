@@ -194,6 +194,25 @@ end
     end
 end
 
+@testset "a cell that loads packages keeps the rest of its output (#96)" begin
+    try
+        r = _capture("using Statistics\nwrite(stdout, \"kept line\\n\")\nprintln(\"also kept\")\nmean([1, 2, 3])")
+        @test r.stdout == "kept line\nalso kept\n"
+        @test r.value_repr == "2.0"
+        @test r.exception === nothing
+
+        # Errors still name the statement's own line, not the cell's first.
+        r = _capture("using Statistics\nx96 = 1\nerror(\"boom\")")
+        @test r.exception !== nothing
+        @test occursin("none:3", r.exception)
+
+        # A cell without `using` still runs as one unit.
+        @test _capture("y96 = 2\nprint(y96)").stdout == "2"
+    finally
+        KaimonGate._restore_capture!()
+    end
+end
+
 @testset "redirect_stdout/stderr(f, io) restores the capture" begin
     KaimonGate._ensure_capture_installed!()
     try
