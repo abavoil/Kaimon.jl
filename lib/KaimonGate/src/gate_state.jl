@@ -160,9 +160,11 @@ const GATE_LOCK = ReentrantLock()
 # through the single REPL backend and are effectively serial there.
 #   _EVAL_INFLIGHT — evals currently executing (after acquiring a slot)
 #   _EVAL_QUEUED   — evals blocked waiting for a slot (cap exceeded)
-# Both feed the "ran alongside N concurrent eval(s) (M queued)" note on results.
+#   _EVAL_STARTS   — evals ever started, so an eval can count the ones that began after it
+# They feed the "ran alongside N concurrent eval(s) (M queued)" note on results.
 const _EVAL_INFLIGHT = Threads.Atomic{Int}(0)
 const _EVAL_QUEUED   = Threads.Atomic{Int}(0)
+const _EVAL_STARTS   = Threads.Atomic{Int}(0)
 _eval_concurrency() = max(1, something(tryparse(Int, get(ENV, "KAIMON_GATE_EVAL_CONCURRENCY", "")), 4))
 const _EVAL_SEM = Ref{Union{Base.Semaphore,Nothing}}(nothing)
 const _EVAL_SEM_LOCK = ReentrantLock()

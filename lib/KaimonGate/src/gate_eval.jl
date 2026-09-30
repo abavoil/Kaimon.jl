@@ -22,8 +22,13 @@ function gate_eval(code::String; _mod::Module = Main, display_code::String = cod
     Base.acquire(_eval_semaphore())
     Threads.atomic_sub!(_EVAL_QUEUED, 1)
     Threads.atomic_add!(_EVAL_INFLIGHT, 1)
-    peers  = max(0, _EVAL_INFLIGHT[] - 1)   # other evals running alongside this one
-    queued = _EVAL_QUEUED[]                  # evals still waiting for a slot
+    started = Threads.atomic_add!(_EVAL_STARTS, 1)
+    peers_at_start = max(0, _EVAL_INFLIGHT[] - 1)   # evals already running alongside this one
+    queued = _EVAL_QUEUED[]                          # evals still waiting for a slot
+    # Every eval that overlapped this one: those running when it started, plus those that
+    # started before it finished. Counted at the end, so the eval that started first sees
+    # the ones that joined it too.
+    overlapped() = peers_at_start + max(0, _EVAL_STARTS[] - started - 1)
     # Only the PRIMARY eval mirrors to the terminal (header + live output);
     # concurrent evals run headless (captured + streamed to Activity + returned).
     mirror_owned = _mirror_repl() && _claim_mirror!()
@@ -66,7 +71,7 @@ function gate_eval(code::String; _mod::Module = Main, display_code::String = cod
         mirror_owned && _maybe_echo_result(result)
         # Tag the result with how many other evals ran concurrently / were queued,
         # so the server can surface a note when concurrency was actually in play.
-        return result isa NamedTuple ? merge(result, (concurrent = peers, queued = queued)) : result
+        return result isa NamedTuple ? merge(result, (concurrent = overlapped(), queued = queued)) : result
     catch e
         return (
             stdout = "",
@@ -74,7 +79,7 @@ function gate_eval(code::String; _mod::Module = Main, display_code::String = cod
             value_repr = "",
             exception = sprint(showerror, e, catch_backtrace()),
             backtrace = sprint(Base.show_backtrace, catch_backtrace()),
-            concurrent = peers,
+            concurrent = overlapped(),
             queued = queued,
         )
     finally
