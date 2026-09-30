@@ -163,6 +163,7 @@ function Tachikoma.update!(m::KaimonModel, evt::MouseEvent)
                     elseif row == 6; _cycle_qdrant_prefix!(m)
                     elseif row == 8; _install_vscode_remote_control!(m)
                     elseif row == 9; begin_promote_after!(m)
+                    elseif row == 11; cycle_print_strip!(m)
                     end
                 end
             end
@@ -892,6 +893,7 @@ function Tachikoma.update!(m::KaimonModel, evt::KeyEvent)
             'g' => begin_global_gate!(m)
             'm' => toggle_gate_mirror_repl!(m)
             'b' => begin_promote_after!(m)
+            'o' => cycle_print_strip!(m)
             'p' => begin_project_add!(m)
             'D' => begin_project_remove!(m)
             'e' => begin_project_edit_launch!(m)

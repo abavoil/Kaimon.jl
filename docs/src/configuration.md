@@ -9,8 +9,28 @@ Kaimon uses [Preferences.jl](https://github.com/JuliaPackaging/Preferences.jl) f
 | Preference | Type | Description |
 |------------|------|-------------|
 | `gate_mirror_repl` | `Bool` | Mirror eval output from MCP agents into the host REPL. Useful for seeing what agents are executing in real time. |
+| `print_strip` | `String` | How much output-producing code is removed from agent evals: `"off"`, `"moderate"` (default) or `"high"`. Cycle it with `[o]` in the Config tab. See [Print Stripping](@ref print-strip). |
 
 Layout preferences for TUI panels (sizes, positions, visibility) are also persisted through the Preferences system.
+
+### [Print Stripping](@id print-strip)
+
+Agents given a shared REPL tend to report through `println`, `@show` and `@info`, which fills the
+terminal and the agent's context with narration. Kaimon removes those calls from the code an
+agent submits, at the level set by `print_strip` (or the `KAIMON_PRINT_STRIP` environment
+variable, which takes precedence):
+
+| Level | What is removed |
+|-------|-----------------|
+| `off` | Nothing. The code runs exactly as submitted. |
+| `moderate` | With `q=true` only: print calls, `@show` and logging macros that the cell runs as statements. Function, macro, lambda and `do` bodies and call arguments are left alone. |
+| `high` | Print calls everywhere, including inside functions the agent defines, whatever `q` is. `@show` with `q=true`. |
+
+At every level, only Base's `print`/`println`/`printstyled` are candidates (`Profile.print(io)` is
+another function), and a call writing to an IO variable is kept. Logging macros are removed only
+as the cell's own top-level statements, since inside a `try`/`catch` they usually report real
+errors. A removed `@show x = 1` still runs `x = 1`. The rest of the cell reaches the REPL exactly
+as written, and the agent's result carries a note when anything was removed.
 
 ## Directory Layout
 
@@ -254,6 +274,7 @@ that is nearly always a typo in a tool name.
 | `APPDATA` | Windows | Windows config directory. Kaimon stores config in `$APPDATA/Kaimon/`. |
 | `XDG_CACHE_HOME` | Linux/macOS | Override the default cache directory (`~/.cache`). Kaimon stores data in `$XDG_CACHE_HOME/kaimon/`. |
 | `LOCALAPPDATA` | Windows | Windows equivalent of the cache directory. Kaimon stores data in `$LOCALAPPDATA/Kaimon/`. |
+| `KAIMON_PRINT_STRIP` | all | `off`, `moderate` or `high`. Overrides the `print_strip` preference. See [Print Stripping](@ref print-strip). |
 | `KAIMON_TEST_PROMOTE_AFTER` | all | Seconds a test run may hold the foreground before `run_tests` backgrounds it (default `30`). `0` never backgrounds. |
 | `KAIMON_TEST_CONCURRENCY` | all | Test runs allowed in flight per project (default `1`). Runs are serialised because overlapping suites share fixtures and global state. |
 | `KAIMON_TOOL_HOLD_SECONDS` | all | How long an extension's tools stay listed while it restarts (default `45`). Overrides `extension_tool_hold_seconds`. See [Tools Stay Listed Across a Restart](extensions.md#Tools-Stay-Listed-Across-a-Restart). |

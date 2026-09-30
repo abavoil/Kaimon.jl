@@ -580,19 +580,12 @@ end
 """
     _prepare_gate_code(code, quiet) -> (cleaned_code, show_return_value, was_stripped)
 
-Apply println stripping and quiet-mode semicolons to code before sending to gate.
+Apply print stripping (see print_strip.jl) and quiet-mode semicolons to code before
+sending it to the gate.
 """
 function _prepare_gate_code(code::String, quiet::Bool)
-    was_stripped = Ref(false)
-    expr = Base.parse_input_line(code)
-    expr = remove_println_calls(expr, true, quiet, was_stripped)
-    cleaned_code = if expr === nothing
-        ""
-    elseif was_stripped[]
-        _serialize_expr(expr)
-    else
-        code
-    end
+    cleaned_code, stripped = strip_agent_output(code; quiet = quiet)
+    was_stripped = Ref(stripped)
 
     show_return_value = !quiet && !REPL.ends_with_semicolon(code)
     if quiet && !REPL.ends_with_semicolon(cleaned_code)
@@ -688,7 +681,7 @@ function _format_gate_response(
     end
 
     if was_stripped[]
-        result *= "\n\n⚠️  Note: println/print/logging calls were removed. Use q=false with a final expression to see values."
+        result *= "\n\n" * print_strip_note()
     end
 
     if length(result) > max_output

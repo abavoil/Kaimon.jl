@@ -15,6 +15,7 @@ public get_gate_mirror_repl_preference, set_gate_mirror_repl_preference!
 public get_gate_promote_after_preference, set_gate_promote_after_preference!
 public get_test_promote_after_preference, set_test_promote_after_preference!
 public get_test_concurrency_preference, set_test_concurrency_preference!
+public get_print_strip_preference, set_print_strip_preference!
 
 # ============================================================================
 # Port Management

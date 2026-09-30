@@ -45,6 +45,32 @@ function set_gate_promote_after_preference!(secs::Real)::Float64
     return s
 end
 
+const PREF_PRINT_STRIP = "print_strip"   # "off" | "moderate" | "high"
+
+"""
+    get_print_strip_preference() -> Symbol
+
+How much output-producing code is removed from agent evals: `:off`, `:moderate` (the
+default) or `:high`. See print_strip.jl. Overridden by the `KAIMON_PRINT_STRIP` env var
+in `print_strip_level`.
+"""
+function get_print_strip_preference()::Symbol
+    val = @load_preference(PREF_PRINT_STRIP, "moderate")
+    return val isa AbstractString ? _parse_strip_level(val) : :moderate
+end
+
+"""
+    set_print_strip_preference!(level) -> Symbol
+
+Persist the print-strip level in LocalPreferences.toml.
+"""
+function set_print_strip_preference!(level)::Symbol
+    lv = Symbol(level)
+    lv in PRINT_STRIP_LEVELS || throw(ArgumentError("print strip level must be one of $(PRINT_STRIP_LEVELS), got $(repr(level))"))
+    @set_preferences!(PREF_PRINT_STRIP => String(lv))
+    return lv
+end
+
 const PREF_TEST_PROMOTE_AFTER = "test_promote_after"   # seconds; 0 = never background
 
 """

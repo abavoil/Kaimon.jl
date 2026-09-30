@@ -449,7 +449,7 @@ repl_tool = @mcp_tool(
 
 Pass the code as `e` — e.g. ex(e="1 + 1"). (It is `e`, not `code`; a call without `e` returns an error.)
 Default q=true: suppresses return values (token-efficient). Use q=false only when you need the result.
-println/print to stdout are stripped from agent code. Use q=false with a final expression to see values.
+With q=true, println/print/@show/logging calls in the cell are removed before it runs, so don't use them to report results: end the cell with the value and pass q=false. The result says when anything was removed.
 s=true (rare): suppresses agent> prompt and REPL echo for large outputs.
 mt=true: routes eval through the REPL backend (thread 1). ALWAYS use mt=true for GLMakie, GLFW, or any GPU/OpenGL code — including `using GLMakie`, `display(fig)`, and plot creation. Without it, these will fail with ThreadAssertionError.""",
     Dict(

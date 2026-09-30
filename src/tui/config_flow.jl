@@ -472,6 +472,17 @@ function cycle_editor!(m::KaimonModel)
     _push_log!(:info, "Editor set to $(m.editor)")
 end
 
+function cycle_print_strip!(m::KaimonModel)
+    m._render_mode && return
+    levels = PRINT_STRIP_LEVELS
+    cur = get_print_strip_preference()
+    next = levels[mod1(something(findfirst(==(cur), levels), 0) + 1, length(levels))]
+    set_print_strip_preference!(next)
+    msg = "Agent print stripping set to $next"
+    haskey(ENV, "KAIMON_PRINT_STRIP") && (msg *= " (KAIMON_PRINT_STRIP=$(ENV["KAIMON_PRINT_STRIP"]) still overrides it)")
+    _push_log!(:info, msg)
+end
+
 function toggle_gate_mirror_repl!(m::KaimonModel)
     m._render_mode && return
     new_value = !m.gate_mirror_repl

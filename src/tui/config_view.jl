@@ -135,6 +135,15 @@ function view_config_base(m::KaimonModel, area::Rect, buf::Buffer)
         pa_status = _promote_after_label(pa)
         pa_style = pa <= 0 ? tstyle(:warning) : tstyle(:success)
         set_string!(buf, x + 4, y, "after: $pa_status", pa_style; max_x=arx)
+        y += 1
+        # Row 11: [o] Print stripping level
+        set_string!(buf, x, y, "[o]", tstyle(:accent, bold = true); max_x=arx)
+        set_string!(buf, x + 4, y, "Strip agent print output", tstyle(:text); max_x=arx)
+        y += 1
+        ps = print_strip_level()
+        ps_note = haskey(ENV, "KAIMON_PRINT_STRIP") ? " (KAIMON_PRINT_STRIP)" : ""
+        ps_style = ps === :off ? tstyle(:warning) : tstyle(:success)
+        set_string!(buf, x + 4, y, "level: $ps$ps_note", ps_style; max_x=arx)
     end
 
     # ── Right column: MCP Clients (top) + Projects & TCP Gates side-by-side (bottom) ──
