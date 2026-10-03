@@ -236,6 +236,8 @@ function spawn_test_run(
     env = Dict(k => v for (k, v) in ENV)
     delete!(env, "JULIA_LOAD_PATH")
     delete!(env, "JULIA_PROJECT")
+    # Where a project without test/Project.toml keeps the env built from its [extras]/[targets].
+    get!(env, "KAIMON_TEST_ENV_CACHE", joinpath(kaimon_cache_dir(), "test-envs"))
     # `--code-coverage=user` makes the subprocess emit <src>.jl.<pid>.cov files for user
     # code on exit (the suite runs in-process via include); _collect_coverage parses and
     # removes them afterward.

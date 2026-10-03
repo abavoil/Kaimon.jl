@@ -147,6 +147,41 @@ using Kaimon
         end
     end
 
+    @testset "an [extras]/[targets] env is built once and reused until Project.toml changes" begin
+        if ci
+            @test_skip "cached extras env (spawns a sub-subprocess; skipped in CI)"
+        else
+            dir = mktempdir()
+            mkpath(joinpath(dir, "src"))
+            mkpath(joinpath(dir, "test"))
+            write(joinpath(dir, "src", "Legacy.jl"), "module Legacy end\n")
+            project = """
+            name = "Legacy"
+            uuid = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
+            version = "0.1.0"
+
+            [extras]
+            Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+            [targets]
+            test = ["Test"]
+            """
+            write(joinpath(dir, "Project.toml"), project)
+            write(joinpath(dir, "test", "runtests.jl"),
+                  "using Test, Legacy\n@testset \"legacy\" begin\n    @test true\nend\n")
+            withenv("KAIMON_TEST_ENV_CACHE" => mktempdir()) do
+                first_run = _run_to_completion(dir)
+                @test first_run.status == Kaimon.RUN_PASSED
+                @test first_run.manifest_name == "extras-built"
+                second = _run_to_completion(dir)
+                @test second.status == Kaimon.RUN_PASSED
+                @test second.manifest_name == "extras-reused"
+                write(joinpath(dir, "Project.toml"), project * "\n[compat]\njulia = \"1.10\"\n")
+                @test _run_to_completion(dir).manifest_name == "extras-built"
+            end
+        end
+    end
+
     @testset "a manifest the project has moved past is re-resolved, not reported as failure" begin
         if ci
             @test_skip "stale-manifest recovery (spawns a sub-subprocess; skipped in CI)"
