@@ -182,17 +182,20 @@ function _rpc_session_info(request, session)
     end
 end
 
-function _rpc_tools_list(request, tools)
+function _rpc_tools_list(request, tools, session = nothing)
     # Internal worker tools (relayed to by intermediary sessions) are hidden by
     # default; a client can pass params.include_hidden=true to see them.
     include_hidden = get(get(request, "params", Dict()), "include_hidden", false) === true
+    # An agent opened with `only` is shown just the tools it was given, as it may call no others.
+    only = _only_tools_for_session(session)
     tool_list = [
         Dict(
             "name" => tool.name,
             "title" => tool.title,
             "description" => tool.description,
             "inputSchema" => tool.parameters,
-        ) for tool in values(tools) if include_hidden || !tool.hidden
+        ) for tool in values(tools) if (include_hidden || !tool.hidden) &&
+                                         (only === nothing || _only_allows(only, tool.name))
     ]
 
     response = Dict(
@@ -402,6 +405,14 @@ function _tool_refusal_response(request, tool_name::AbstractString, why::Abstrac
     HTTP.Response(200, ["Content-Type" => "application/json"],
                   JSON.json(Dict("jsonrpc" => "2.0", "id" => get(request, "id", 0),
                                  "result" => result)))
+end
+
+"The tool list of the `only` agent owning this MCP session, or `nothing` when it has none."
+function _only_tools_for_session(session)
+    aid = _session_agent_id(session === nothing ? "" : session.id)
+    isempty(aid) && return nothing
+    s = lock(AGENT_SESSIONS_LOCK) do; get(AGENT_SESSIONS, aid, nothing); end
+    return s !== nothing && s.backend isa ClaudeBackend && s.backend.only ? s.backend.allowed_tools : nothing
 end
 
 """

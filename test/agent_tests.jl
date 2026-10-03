@@ -1,6 +1,9 @@
 using ReTest
 using Kaimon
 
+# An agent handle that is never driven: for a session whose policy alone is under test.
+struct OnlyTestHandle <: Kaimon.AgentHandle end
+
 # Replay a sequence of stream-JSON objects through the mapper, collecting every emitted
 # ACP event (mirrors what _start_reader! does line-by-line). Shares one session_id Ref.
 function _agent_map_seq(objs)
@@ -242,6 +245,37 @@ end
         @test !("--include-partial-messages" in off)
         # streaming is on by default
         @test "--include-partial-messages" in Kaimon._claude_args(Kaimon.ClaudeBackend(), ".")
+    end
+
+    @testset "ClaudeBackend: `only` makes allowed_tools the whole tool set" begin
+        allowed = ["Read", "Bash(git *)", "mcp__kaimon__notes_search", "mcp__kaimon__slate_dbg.frame"]
+        tools_flag(b) = (args = Kaimon._claude_args(b, "."); i = findfirst(==("--tools"), args);
+                         i === nothing ? nothing : args[i+1])
+        # Built-ins: only those named, without argument patterns, and ToolSearch to reach MCP tools.
+        @test tools_flag(Kaimon.ClaudeBackend(; allowed_tools = allowed, only = true)) == "Read,Bash,ToolSearch"
+        @test tools_flag(Kaimon.ClaudeBackend(; allowed_tools = ["Read", "Write"], only = true)) == "Read,Write"
+        @test tools_flag(Kaimon.ClaudeBackend(; only = true)) == ""          # nothing named: no built-ins
+        @test tools_flag(Kaimon.ClaudeBackend(; allowed_tools = allowed)) === nothing
+        # Kaimon's tools: only those named, in either spelling, or all when the server is named.
+        @test Kaimon._only_allows(allowed, "notes_search")
+        @test Kaimon._only_allows(allowed, "slate_dbg.frame") && Kaimon._only_allows(allowed, "slate_dbg_frame")
+        @test !Kaimon._only_allows(allowed, "ex") && Kaimon._only_allows(["mcp__kaimon"], "ex")
+
+        # Refused at tools/call for the agent that was given them, and only for it.
+        aid = "only-test-agent"
+        s = Kaimon.AgentSession(aid, Kaimon.ClaudeBackend(; allowed_tools = allowed, only = true), OnlyTestHandle(),
+                                ".", "opus", :idle, Task(() -> nothing), time(), time(), Kaimon.ACP.Usage(),
+                                Any[], String[], String[], ReentrantLock())
+        lock(Kaimon.AGENT_SESSIONS_LOCK) do; Kaimon.AGENT_SESSIONS[aid] = s; end
+        try
+            @test Kaimon.agent_tool_refusal(aid, "notes_search") === nothing
+            @test occursin("not among the tools", Kaimon.agent_tool_refusal(aid, "ex"))
+            s.backend = Kaimon.ClaudeBackend(; allowed_tools = allowed)
+            @test Kaimon.agent_tool_refusal(aid, "ex") === nothing        # without `only`, as before
+        finally
+            lock(Kaimon.AGENT_SESSIONS_LOCK) do; delete!(Kaimon.AGENT_SESSIONS, aid); end
+        end
+        @test_throws ErrorException Kaimon.agent_open(; cwd = ".", model = "acp:opencode", only = true)
     end
 
     @testset "_spawn_argv wraps Windows shim scripts, not native exes" begin

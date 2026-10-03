@@ -168,6 +168,7 @@ function agent_open(; cwd::String,
                     mcp_config::Union{String,Nothing} = nothing,
                     system_prompt::Union{String,Nothing} = nothing,
                     effort::Union{String,Nothing} = nothing,
+                    only::Bool = false,
                     id::Union{String,Nothing} = nothing)
     aid = id === nothing ? _gen_agent_id() : id
     lock(AGENT_SESSIONS_LOCK) do
@@ -190,6 +191,10 @@ function agent_open(; cwd::String,
     # local model in-process (no CLI, no MCP subprocess) over the Ollama /api/chat
     # wire protocol; vmlx is Ollama-compatible and defaults to its own port (:8000),
     # so no OLLAMA_HOST env hack. Anything else is the claude CLI.
+    # A local model's non-empty allowlist is already its whole tool set; an ACP agent's is not, and
+    # its preset is what restricts it.
+    only && startswith(model, ACP_PREFIX) &&
+        error("`only` is not for ACP agents: permission \"specialist\" makes their allowlist the whole tool set")
     backend = if startswith(model, ACP_PREFIX)
         # Any ACP-speaking agent. Tool policy can't ride the protocol, so the
         # preset and the recursion guard are handed to the bridge plugin instead.
@@ -228,7 +233,7 @@ function agent_open(; cwd::String,
                       allowed_tools = final_allowed, disallowed_tools = disallowed_tools,
                       mcp_config = agent_mcp, system_prompt = system_prompt,
                       effort = effort !== nothing ? effort : suffix_effort,
-                      dangerously_skip = dangerous)
+                      dangerously_skip = dangerous, only = only)
     end
     handle = backend_start(backend; cwd = cwd, agent_id = aid)
     apid = backend_pid(handle)                       # nothing for process-less backends

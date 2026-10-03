@@ -732,7 +732,7 @@ function create_handler(
                 return _rpc_notifications_initialized(request, session)
             method == "logging/setLevel" && return _rpc_logging_setlevel(request)
             method == "session/info" && return _rpc_session_info(request, session)
-            method == "tools/list" && return _rpc_tools_list(request, tools)
+            method == "tools/list" && return _rpc_tools_list(request, tools, session)
             method == "resources/list" && return _rpc_resources_list(request)
             method == "resources/read" && return _rpc_resources_read(request)
             method == "resources/templates/list" &&
