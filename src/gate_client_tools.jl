@@ -147,13 +147,15 @@ _process_gone(conn::REPLConnection) = (!_is_tcp(conn) || _is_local_tcp(conn)) &&
 
 Whether a tool call can go to `conn`'s gate. One still connecting is waited for, up to `wait_s`
 seconds. A stalled one (busy, as a process often is just after it starts, compiling) is sent the
-call, which it answers once it is free, as any request to it is.
+call, which it answers once it is free, as any request to it is — unless its process has exited,
+which would leave the call waiting out its whole timeout.
 """
 function _gate_callable(conn::REPLConnection; wait_s::Real = 10.0)
     deadline = time() + wait_s
     while conn.status == :connecting && time() < deadline
         sleep(0.1)
     end
+    conn.status == :stalled && _process_gone(conn) && return false
     return conn.status in (:connected, :evaluating, :stalled) && conn.req_channel !== nothing
 end
 

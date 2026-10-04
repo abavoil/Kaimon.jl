@@ -762,4 +762,14 @@ end
     c.status = :stalled                                     # stalled, but with no request channel to send on
     @test !Kaimon._gate_callable(c; wait_s = 0)
     @test occursin("status=stalled", Kaimon._call_session_tool(c, "t", Dict()))
+
+    # Stalled with a channel: a busy gate is sent the call, one whose process exited is not.
+    c.req_channel = Kaimon.RequestChannel(
+        Kaimon.ZMQ.Socket(Kaimon.ZMQ.DEALER), "ipc:///kaimon-test-unused",
+        Channel{Tuple{UInt64,Vector{UInt8}}}(1), Dict{UInt64,Channel{Any}}(), ReentrantLock(),
+        Threads.Atomic{UInt64}(0), nothing, nothing, Ref(true), nothing, ReentrantLock())
+    c.pid = getpid()
+    @test Kaimon._gate_callable(c; wait_s = 0)
+    c.pid = _dead_pid()
+    @test !Kaimon._gate_callable(c; wait_s = 0)
 end
