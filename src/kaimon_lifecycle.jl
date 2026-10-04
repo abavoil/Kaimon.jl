@@ -14,6 +14,16 @@ const HOUSEKEEPING_TASK = Ref{Union{Task,Nothing}}(nothing)
 const HOUSEKEEPING_STOP = Ref{Bool}(false)
 
 """
+    code_indexing() -> Bool
+
+Whether this Kaimon indexes code on its own: approved and connected projects, at startup and
+periodically, and the lexical index's catch-up and pruning over every collection in Qdrant.
+`KAIMON_CODE_INDEX=0` turns it off, for a Kaimon embedded in another service, which shares a Qdrant
+it must leave alone and serves no one's code.
+"""
+code_indexing() = get(ENV, "KAIMON_CODE_INDEX", "") != "0"
+
+"""
     _headless_sync_interval_seconds() -> Int
 
 Seconds between periodic full index syncs (0 disables). `KAIMON_HEADLESS_SYNC_INTERVAL`

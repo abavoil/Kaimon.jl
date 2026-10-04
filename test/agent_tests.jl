@@ -314,6 +314,15 @@ end
             @test Kaimon._extension_cmdline_matches(cmd(nothing), "slate")
             @test !Kaimon._extension_cmdline_matches(cmd("0123456789ab"), "slate")
         end
+        # It indexes no code: it shares a Qdrant it must leave alone.
+        withenv("KAIMON_CODE_INDEX" => "0") do
+            @test !Kaimon.code_indexing()
+            @test Kaimon._spawn_fts_coverage_sync!(; delay = 0) === nothing
+            @test Kaimon._auto_index_project!(pkgdir(Kaimon)) === nothing
+        end
+        withenv("KAIMON_CODE_INDEX" => nothing) do
+            @test Kaimon.code_indexing()
+        end
 
         # Tools per caller, named on each request by the service in front.
         s = (; id = "allow-test-session")
