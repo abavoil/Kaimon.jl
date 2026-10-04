@@ -313,6 +313,42 @@ _session_agent_id(sid::AbstractString) =
         get(_SESSION_AGENT_ID, String(sid), "")
     end
 
+# ── Tools allowed per session ────────────────────────────────────────────────────────────────────
+# A service that puts Kaimon behind it (offering a few of its tools to its own users, say) names,
+# on each request, the tools that request's caller may use: `X-Kaimon-Allowed-Tools`,
+# comma-separated, in the dotted (`notes.search`) or underscore spelling. It is read on every request, since a
+# client can always start a fresh session, and the service in front must strip any copy a client
+# sends. With `KAIMON_RESTRICTED=1`, a session given no list and owned by no agent may use nothing.
+
+const _SESSION_ALLOWED = Dict{String,Vector{String}}()
+const _SESSION_ALLOWED_LOCK = ReentrantLock()
+
+"Record the tools MCP session `sid` may use (`nothing`: no list, as the request named none)."
+function _set_session_allowed!(sid::AbstractString, tools::Union{Nothing,Vector{String}})
+    isempty(sid) && return nothing
+    lock(_SESSION_ALLOWED_LOCK) do
+        tools === nothing ? delete!(_SESSION_ALLOWED, String(sid)) : (_SESSION_ALLOWED[String(sid)] = tools)
+    end
+    return nothing
+end
+
+"Whether this Kaimon serves only the tools each request names (see `_session_allowed_tools`)."
+_restricted() = get(ENV, "KAIMON_RESTRICTED", "") == "1"
+
+"""
+The tools MCP session `sid` may use, or `nothing` for no limit beyond the server's own. A restricted
+Kaimon gives a session with no list, and no agent behind it, an empty one.
+"""
+function _session_allowed_tools(sid::AbstractString)
+    list = lock(() -> get(_SESSION_ALLOWED, String(sid), nothing), _SESSION_ALLOWED_LOCK)
+    list === nothing && _restricted() && isempty(_session_agent_id(sid)) && return String[]
+    return list
+end
+
+"Whether `list` names `tool`, in either spelling."
+_allowed_by(list::AbstractVector{<:AbstractString}, tool::AbstractString) =
+    (t = replace(String(tool), '.' => '_'); any(e -> replace(e, '.' => '_') == t, list))
+
 """The Kaimon agent_id for the in-flight tool dispatch, or "" for external/self calls."""
 _current_mcp_agent_id() = string(get(task_local_storage(), :mcp_agent_id, ""))
 

@@ -188,6 +188,7 @@ function _rpc_tools_list(request, tools, session = nothing)
     include_hidden = get(get(request, "params", Dict()), "include_hidden", false) === true
     # An agent opened with `only` is shown just the tools it was given, as it may call no others.
     only = _only_tools_for_session(session)
+    allowed = session === nothing ? (_restricted() ? String[] : nothing) : _session_allowed_tools(session.id)
     tool_list = [
         Dict(
             "name" => tool.name,
@@ -195,7 +196,8 @@ function _rpc_tools_list(request, tools, session = nothing)
             "description" => tool.description,
             "inputSchema" => tool.parameters,
         ) for tool in values(tools) if (include_hidden || !tool.hidden) &&
-                                         (only === nothing || _only_allows(only, tool.name))
+                                         (only === nothing || _only_allows(only, tool.name)) &&
+                                         (allowed === nothing || _allowed_by(allowed, tool.name))
     ]
 
     response = Dict(
@@ -424,8 +426,13 @@ inspection: `args` was once left off the streaming side, which quietly exempted 
 eliciting and extension tool from the workspace boundary while the name check still ran. So the
 question is asked in one place and `args` is not optional here.
 """
-_refuse_tool_for_session(session, tool_name::AbstractString, args) =
-    agent_tool_refusal(_session_agent_id(session === nothing ? "" : session.id), tool_name, args)
+function _refuse_tool_for_session(session, tool_name::AbstractString, args)
+    # The tools the service in front allows this caller come first: no agent's own allowance
+    # widens them (see `_session_allowed_tools`).
+    allowed = session === nothing ? (_restricted() ? String[] : nothing) : _session_allowed_tools(session.id)
+    allowed === nothing || _allowed_by(allowed, tool_name) || return "$tool_name is not among the tools this caller may use"
+    return agent_tool_refusal(_session_agent_id(session === nothing ? "" : session.id), tool_name, args)
+end
 
 function _rpc_tools_call(request, tools, name_to_id, session = nothing)
                 params = get(request, "params", nothing)

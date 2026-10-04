@@ -74,7 +74,12 @@ function _gate_cache_dir()
     # gate auto-discovery whenever XDG_CACHE_HOME is set. Mirrors the #42 server
     # fix (1cf20a5) on the gate side — the half PR #45 patched in gate.jl that the
     # KaimonGate split didn't carry over. (#42, #45)
-    d = if Sys.iswindows()
+    # `KAIMON_CACHE_DIR` names the directory itself, for a Kaimon embedded in another service: its
+    # gates find it, and not a Kaimon the same person runs. It must match the server's.
+    explicit = get(ENV, "KAIMON_CACHE_DIR", "")
+    d = if !isempty(explicit)
+        explicit
+    elseif Sys.iswindows()
         joinpath(
             get(ENV, "LOCALAPPDATA", joinpath(homedir(), "AppData", "Local")),
             "Kaimon",

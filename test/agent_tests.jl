@@ -296,6 +296,49 @@ end
         end
     end
 
+    @testset "an embedded Kaimon: its own directories, extensions and tools per caller" begin
+        # Its own directories, named outright.
+        d = mktempdir()
+        withenv("KAIMON_CACHE_DIR" => joinpath(d, "c"), "KAIMON_CONFIG_DIR" => joinpath(d, "f")) do
+            @test Kaimon.kaimon_cache_dir() == joinpath(d, "c") && Kaimon.kaimon_config_dir() == joinpath(d, "f")
+            @test Kaimon._tui_log_path() == joinpath(d, "c", "server.log")
+            @test Kaimon.KaimonGate.sock_dir() == joinpath(d, "c", "sock")
+            # It reaps only its own extensions: those marked with its id, not the default Kaimon's.
+            id = Kaimon._instance_id()
+            @test Kaimon._is_this_instance(id) && !Kaimon._is_this_instance(nothing) && !Kaimon._is_this_instance("0123456789ab")
+        end
+        withenv("KAIMON_CACHE_DIR" => nothing) do
+            @test Kaimon._is_this_instance(nothing)              # unmarked: started before the markers, the default's
+            cmd(inst) = "julia -e spawned_by=\"extension\" namespace=\\\"slate\\\" " * (inst === nothing ? "" : "kaimon_instance=$inst")
+            @test Kaimon._extension_cmdline_matches(cmd(Kaimon._instance_id()), "slate")
+            @test Kaimon._extension_cmdline_matches(cmd(nothing), "slate")
+            @test !Kaimon._extension_cmdline_matches(cmd("0123456789ab"), "slate")
+        end
+
+        # Tools per caller, named on each request by the service in front.
+        s = (; id = "allow-test-session")
+        Kaimon._set_session_allowed!(s.id, ["notes.search", "notes_read"])
+        try
+            @test Kaimon._refuse_tool_for_session(s, "notes.search", nothing) === nothing
+            @test Kaimon._refuse_tool_for_session(s, "notes.read", nothing) === nothing     # either spelling
+            @test occursin("not among", Kaimon._refuse_tool_for_session(s, "ex", nothing))
+            @test occursin("not among", Kaimon._refuse_tool_for_session(s, "notes.add", nothing))
+            Kaimon._set_session_allowed!(s.id, String[])                                          # an empty list: nothing
+            @test Kaimon._refuse_tool_for_session(s, "notes.search", nothing) !== nothing
+            Kaimon._set_session_allowed!(s.id, nothing)                                           # no list: as before
+            @test Kaimon._refuse_tool_for_session(s, "ex", nothing) === nothing
+            withenv("KAIMON_RESTRICTED" => "1") do                                                # restricted: no list, no tools
+                @test Kaimon._refuse_tool_for_session(s, "ex", nothing) !== nothing
+                @test Kaimon._refuse_tool_for_session(nothing, "ex", nothing) !== nothing
+                Kaimon._set_session_agent_id!(s.id, "some-agent")                                 # an agent's session: its own rules
+                @test Kaimon._refuse_tool_for_session(s, "ex", nothing) === nothing
+            end
+        finally
+            Kaimon._set_session_allowed!(s.id, nothing)
+            lock(Kaimon._SESSION_AGENT_ID_LOCK) do; delete!(Kaimon._SESSION_AGENT_ID, s.id); end
+        end
+    end
+
     @testset "_spawn_argv wraps Windows shim scripts, not native exes" begin
         args = ["--model", "sonnet", "--add-dir", "C:\\a b"]
         # Windows npm shim (.cmd) → launched via cmd.exe /d /c (CreateProcess can't exec it).
