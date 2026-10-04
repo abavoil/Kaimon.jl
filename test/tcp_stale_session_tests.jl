@@ -728,3 +728,38 @@ end
     @test "tcp-127.0.0.1-9200" in ids       # untracked local TCP → still discovered
     rm(dir; recursive = true)
 end
+
+@testset "A restarted gate takes its namespace back" begin
+    mgr = Kaimon.ConnectionManager(sock_dir = mktempdir())
+    conn(id, pid, ns, status) = (c = Kaimon.REPLConnection(session_id = id, endpoint = "ipc:///tmp/$id.sock",
+                                                             spawned_by = "user", pid = Int(pid));
+                                 c.namespace = ns; c.status = status; c)
+    # The session it replaces, its process gone but not reaped yet, gives the namespace up.
+    old = conn("old-gate", _dead_pid(), "kb", :connected)
+    bystander = conn("other-gate", getpid(), "other", :connected)
+    new = conn("new-gate", getpid(), "kb", :connecting)
+    lock(mgr.lock) do
+        append!(mgr.connections, [old, bystander, new])
+    end
+    @test Kaimon._resolve_namespace!(new, mgr) == "kb"
+    @test !(old in mgr.connections) && bystander in mgr.connections && old.status == :disconnected
+    # A live session of the namespace keeps it: another one still gets a suffix.
+    new.status = :connected
+    another = conn("another-gate", getpid(), "kb", :connecting)
+    lock(mgr.lock) do
+        push!(mgr.connections, another)
+    end
+    @test Kaimon._resolve_namespace!(another, mgr) == "kb_2" && new in mgr.connections
+end
+
+@testset "Tool calls wait for a gate that is connecting" begin
+    c = Kaimon.REPLConnection(session_id = "slow-gate", endpoint = "ipc:///tmp/slow-gate.sock", spawned_by = "user")
+    c.status = :connecting
+    @async (sleep(0.3); c.status = :disconnected)
+    t = time()
+    @test !Kaimon._gate_callable(c; wait_s = 5)            # gave up when it failed, not after the wait
+    @test time() - t < 2
+    c.status = :stalled                                     # stalled, but with no request channel to send on
+    @test !Kaimon._gate_callable(c; wait_s = 0)
+    @test occursin("status=stalled", Kaimon._call_session_tool(c, "t", Dict()))
+end
