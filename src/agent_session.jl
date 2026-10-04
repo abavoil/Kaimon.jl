@@ -120,10 +120,10 @@ end
 
 """Generate a temporary MCP config for a spawned agent that points at this Kaimon
 server with an `X-Kaimon-Agent-Id: <agent_id>` header, so the agent's tool calls
-(including extension `slate_*` calls) are attributable to it. Merges over the agent's
-default `claude` config — the `kaimon` server entry is overridden by name, other MCP
-servers are kept (no `--strict-mcp-config`). Returns the file path, or `nothing` if the
-server port isn't up yet (the agent then uses its default config, uncorrelated)."""
+(including extension `slate_*` calls) are attributable to it. The agent is started with
+`--strict-mcp-config` (`ClaudeBackend.strict_mcp`), so this is the only MCP server it sees.
+Returns the file path, or `nothing` if the server port isn't up yet (the agent then uses its
+default config, uncorrelated — except an `only` agent, which gets no MCP servers)."""
 function _agent_mcp_config(agent_id::AbstractString)::Union{String,Nothing}
     port = MCP_SERVER_PORT[]
     if port == 0
@@ -228,7 +228,13 @@ function agent_open(; cwd::String,
         base_model, suffix_effort = _split_model_effort(model)
         # No explicit mcp_config → generate one that points at this Kaimon server with
         # this agent's id header, so its tool calls are attributable (_agent_mcp_config).
+        # Kaimon can only hold an `only` agent to its list when it can tell the agent's calls
+        # apart, which takes that header — so an `only` agent never runs on a config without it.
+        only && mcp_config !== nothing &&
+            error("`only` needs the MCP config Kaimon generates (it identifies the agent's calls); omit mcp_config")
         agent_mcp = mcp_config === nothing ? _agent_mcp_config(aid) : mcp_config
+        only && agent_mcp === nothing && any(t -> startswith(t, "mcp__"), final_allowed) &&
+            error("`only` agent names MCP tools, but the Kaimon MCP server's port isn't known yet; retry once it is up")
         ClaudeBackend(; model = base_model, permission_mode = final_mode,
                       allowed_tools = final_allowed, disallowed_tools = disallowed_tools,
                       mcp_config = agent_mcp, system_prompt = system_prompt,

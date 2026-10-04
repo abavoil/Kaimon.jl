@@ -89,10 +89,12 @@ end
 
 The CLI's built-in tools an `only` agent keeps: those `allowed` names, without any argument
 pattern (`Bash(git *)` keeps `Bash`), and `ToolSearch` when it may use MCP tools, which the CLI
-loads through it.
+loads through it. ACP callback names (`fs/read_text_file`, from the `lab` preset) are not CLI
+tools and are left out.
 """
 function _only_builtin_tools(allowed::AbstractVector{<:AbstractString})
-    builtin = unique!([String(first(split(t, '('))) for t in allowed if !startswith(t, "mcp__")])
+    builtin = unique!([String(first(split(t, '('))) for t in allowed
+                       if !startswith(t, "mcp__") && !occursin('/', first(split(t, '(')))])
     any(t -> startswith(t, "mcp__"), allowed) && !("ToolSearch" in builtin) && push!(builtin, "ToolSearch")
     return builtin
 end
@@ -199,6 +201,9 @@ function _claude_args(b::ClaudeBackend, cwd::AbstractString)
     if b.mcp_config !== nothing
         push!(args, "--mcp-config", b.mcp_config)
         b.strict_mcp && push!(args, "--strict-mcp-config")
+    elseif b.only
+        # No config of ours: an `only` agent gets no MCP servers rather than the user's.
+        push!(args, "--strict-mcp-config")
     end
     if b.system_prompt !== nothing && !isempty(b.system_prompt)
         push!(args, "--append-system-prompt", b.system_prompt)

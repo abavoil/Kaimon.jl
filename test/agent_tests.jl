@@ -276,6 +276,24 @@ end
             lock(Kaimon.AGENT_SESSIONS_LOCK) do; delete!(Kaimon.AGENT_SESSIONS, aid); end
         end
         @test_throws ErrorException Kaimon.agent_open(; cwd = ".", model = "acp:opencode", only = true)
+
+        # ACP callback names from the `lab` preset are not CLI tools.
+        @test Kaimon._only_builtin_tools(["Read", "fs/read_text_file", "mcp__kaimon__ex"]) == ["Read", "ToolSearch"]
+        # Without a config of Kaimon's, an `only` agent gets no MCP servers rather than the user's.
+        args = Kaimon._claude_args(Kaimon.ClaudeBackend(; only = true), ".")
+        @test "--strict-mcp-config" in args && !("--mcp-config" in args)
+        @test !("--strict-mcp-config" in Kaimon._claude_args(Kaimon.ClaudeBackend(), "."))
+        # A config without Kaimon's agent header would leave the agent's calls unattributable.
+        @test_throws ErrorException Kaimon.agent_open(; cwd = ".", only = true, mcp_config = "/tmp/x.json",
+                                                      allowed_tools = ["Read"])
+        port = Kaimon.MCP_SERVER_PORT[]
+        Kaimon.MCP_SERVER_PORT[] = 0
+        try
+            @test_throws ErrorException Kaimon.agent_open(; cwd = ".", only = true,
+                                                          allowed_tools = ["mcp__kaimon__ex"])
+        finally
+            Kaimon.MCP_SERVER_PORT[] = port
+        end
     end
 
     @testset "_spawn_argv wraps Windows shim scripts, not native exes" begin
