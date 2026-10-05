@@ -325,16 +325,18 @@ end
         end
 
         # Tools per caller, named on each request by the service in front.
+        @test Kaimon._parse_allowed_tools(" notes.search, notes_read ,") == ["notes.search", "notes_read"]
+        @test Kaimon._parse_allowed_tools(nothing) === nothing
         s = (; id = "allow-test-session")
-        Kaimon._set_session_allowed!(s.id, ["notes.search", "notes_read"])
         try
+            Kaimon._set_request_allowed!(["notes.search", "notes_read"])
             @test Kaimon._refuse_tool_for_session(s, "notes.search", nothing) === nothing
             @test Kaimon._refuse_tool_for_session(s, "notes.read", nothing) === nothing     # either spelling
             @test occursin("not among", Kaimon._refuse_tool_for_session(s, "ex", nothing))
             @test occursin("not among", Kaimon._refuse_tool_for_session(s, "notes.add", nothing))
-            Kaimon._set_session_allowed!(s.id, String[])                                          # an empty list: nothing
+            Kaimon._set_request_allowed!(String[])                                                # an empty list: nothing
             @test Kaimon._refuse_tool_for_session(s, "notes.search", nothing) !== nothing
-            Kaimon._set_session_allowed!(s.id, nothing)                                           # no list: as before
+            Kaimon._set_request_allowed!(nothing)                                                 # no list: as before
             @test Kaimon._refuse_tool_for_session(s, "ex", nothing) === nothing
             withenv("KAIMON_RESTRICTED" => "1") do                                                # restricted: no list, no tools
                 @test Kaimon._refuse_tool_for_session(s, "ex", nothing) !== nothing
@@ -342,8 +344,19 @@ end
                 Kaimon._set_session_agent_id!(s.id, "some-agent")                                 # an agent's session: its own rules
                 @test Kaimon._refuse_tool_for_session(s, "ex", nothing) === nothing
             end
+
+            # The list belongs to the request: two requests on one session, overlapping, are each
+            # judged by their own header.
+            judged(list, tool) = fetch(@async begin
+                Kaimon._set_request_allowed!(list)
+                yield()                                       # let the other request set its list
+                Kaimon._refuse_tool_for_session(s, tool, nothing)
+            end)
+            a = @async judged(["notes.search"], "notes.search")
+            b = @async judged(["ex"], "notes.search")
+            @test fetch(a) === nothing && fetch(b) !== nothing
         finally
-            Kaimon._set_session_allowed!(s.id, nothing)
+            Kaimon._set_request_allowed!(nothing)
             lock(Kaimon._SESSION_AGENT_ID_LOCK) do; delete!(Kaimon._SESSION_AGENT_ID, s.id); end
         end
     end

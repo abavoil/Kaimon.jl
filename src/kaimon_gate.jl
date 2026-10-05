@@ -313,34 +313,33 @@ _session_agent_id(sid::AbstractString) =
         get(_SESSION_AGENT_ID, String(sid), "")
     end
 
-# ── Tools allowed per session ────────────────────────────────────────────────────────────────────
+# ── Tools allowed per request ────────────────────────────────────────────────────────────────────
 # A service that puts Kaimon behind it (offering a few of its tools to its own users, say) names,
 # on each request, the tools that request's caller may use: `X-Kaimon-Allowed-Tools`,
-# comma-separated, in the dotted (`notes.search`) or underscore spelling. It is read on every request, since a
-# client can always start a fresh session, and the service in front must strip any copy a client
-# sends. With `KAIMON_RESTRICTED=1`, a session given no list and owned by no agent may use nothing.
+# comma-separated, in the dotted (`notes.search`) or underscore spelling. The list belongs to the
+# request, not its session, so each tool call is judged by its own request's header whatever else
+# shares the session. The service in front must strip any copy a client sends. With
+# `KAIMON_RESTRICTED=1`, a request with no list, from a session no agent owns, may use nothing.
 
-const _SESSION_ALLOWED = Dict{String,Vector{String}}()
-const _SESSION_ALLOWED_LOCK = ReentrantLock()
+"Parse an `X-Kaimon-Allowed-Tools` header value (`nothing`: the request sent none)."
+_parse_allowed_tools(h) =
+    h === nothing ? nothing : String[strip(t) for t in split(h, ',') if !isempty(strip(t))]
 
-"Record the tools MCP session `sid` may use (`nothing`: no list, as the request named none)."
-function _set_session_allowed!(sid::AbstractString, tools::Union{Nothing,Vector{String}})
-    isempty(sid) && return nothing
-    lock(_SESSION_ALLOWED_LOCK) do
-        tools === nothing ? delete!(_SESSION_ALLOWED, String(sid)) : (_SESSION_ALLOWED[String(sid)] = tools)
-    end
-    return nothing
-end
+"""
+Record the list of the request being handled, for this task. Set on every request, with `nothing`
+when it named none: a keep-alive connection serves its requests one after another on one task.
+"""
+_set_request_allowed!(list::Union{Nothing,Vector{String}}) = task_local_storage(:mcp_allowed_tools, list)
 
-"Whether this Kaimon serves only the tools each request names (see `_session_allowed_tools`)."
+"Whether this Kaimon serves only the tools each request names (see `_allowed_tools`)."
 _restricted() = get(ENV, "KAIMON_RESTRICTED", "") == "1"
 
 """
-The tools MCP session `sid` may use, or `nothing` for no limit beyond the server's own. A restricted
-Kaimon gives a session with no list, and no agent behind it, an empty one.
+The tools the request being handled may use, or `nothing` for no limit beyond the server's own. A
+restricted Kaimon gives a request with no list, from a session (`sid`) no agent owns, an empty one.
 """
-function _session_allowed_tools(sid::AbstractString)
-    list = lock(() -> get(_SESSION_ALLOWED, String(sid), nothing), _SESSION_ALLOWED_LOCK)
+function _allowed_tools(sid::AbstractString)
+    list = get(task_local_storage(), :mcp_allowed_tools, nothing)
     list === nothing && _restricted() && isempty(_session_agent_id(sid)) && return String[]
     return list
 end

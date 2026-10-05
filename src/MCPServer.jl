@@ -1200,6 +1200,10 @@ function start_mcp_server(
             # Get or create session
             session, is_new_session = get_or_create_session(session_id, is_initialize)
 
+            # The tools this request's caller may use, named by the service in front (see
+            # `_allowed_tools`). Set on every request, absent or not, before anything can return.
+            _set_request_allowed!(_parse_allowed_tools(HTTP.header(req, "X-Kaimon-Allowed-Tools", nothing)))
+
             # Update activity timestamp so the reaper doesn't kill active sessions
             if session !== nothing
                 Session.update_activity!(session)
@@ -1208,12 +1212,6 @@ function start_mcp_server(
                 # session's extension calls with the agent_id.
                 let aid = try; extract_agent_id(req); catch; ""; end
                     isempty(aid) || _set_session_agent_id!(session.id, aid)
-                end
-                # The tools this request's caller may use, named by the service in front (see
-                # `_session_allowed_tools`); set afresh on every request, absent or not.
-                let h = HTTP.header(req, "X-Kaimon-Allowed-Tools", nothing)
-                    _set_session_allowed!(session.id, h === nothing ? nothing :
-                        String[strip(t) for t in split(h, ',') if !isempty(strip(t))])
                 end
                 # Restore the agent→gate binding for a session brought back from
                 # persistence after a restart (no re-initialize). Fast no-op once bound.
