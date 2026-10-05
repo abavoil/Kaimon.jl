@@ -282,6 +282,10 @@ that is nearly always a typo in a tool name.
 | `APPDATA` | Windows | Windows config directory. Kaimon stores config in `$APPDATA/Kaimon/`. |
 | `XDG_CACHE_HOME` | Linux/macOS | Override the default cache directory (`~/.cache`). Kaimon stores data in `$XDG_CACHE_HOME/kaimon/`. |
 | `LOCALAPPDATA` | Windows | Windows equivalent of the cache directory. Kaimon stores data in `$LOCALAPPDATA/Kaimon/`. |
+| `KAIMON_CONFIG_DIR` | all | Use this directory for config instead of the default. For a Kaimon embedded in another service; see [Running Kaimon inside another service](@ref embedded). |
+| `KAIMON_CACHE_DIR` | all | Use this directory for the cache (database, sockets, sessions, logs) instead of the default. Its gates must see the same value to find it. |
+| `KAIMON_RESTRICTED` | all | `1`: a request that names no tools in `X-Kaimon-Allowed-Tools`, from a session no agent owns, may use none. |
+| `KAIMON_CODE_INDEX` | all | `0`: no automatic code indexing, and no FTS catch-up or pruning over the shared Qdrant. |
 | `KAIMON_AGENT_SESSIONS` | all | `shared` or `private`. Overrides the `agent_sessions` preference. |
 | `KAIMON_PRINT_STRIP` | all | `off`, `moderate` or `high`. Overrides the `print_strip` preference. See [Print Stripping](@ref print-strip). |
 | `KAIMON_TEST_PROMOTE_AFTER` | all | Seconds a test run may hold the foreground before `run_tests` backgrounds it (default `30`). `0` never backgrounds. |
@@ -302,6 +306,23 @@ These configure the gate (`KaimonGate`); they can also be set in a project's
     `kaimon.toml` when the package loads. A standalone `using KaimonGate` session
     does not auto-start — it reads them for settings but you must call
     `KaimonGate.serve()` explicitly.
+
+## [Running Kaimon inside another service](@id embedded)
+
+A service can run a headless Kaimon of its own and put it in front of its users, beside the Kaimon
+the same person runs for their own work. These settings keep the two apart and let the service
+decide which tools each of its callers may use:
+
+- `KAIMON_CONFIG_DIR` and `KAIMON_CACHE_DIR` give the instance its own config, keys, sockets,
+  sessions and log. Each Kaimon reaps only the extensions it started.
+- The service sends `X-Kaimon-Allowed-Tools` on every request it forwards: the tools that request's
+  caller may use, comma-separated, in the dotted (`notes.search`) or underscore spelling. Each tool
+  call and tool list is judged by the header on its own request. The service must strip any copy a
+  client sends.
+- `KAIMON_RESTRICTED=1` makes a request with no list get no tools, unless an agent Kaimon owns is
+  behind its session. An agent's own permissions never widen the list.
+- `KAIMON_CODE_INDEX=0` stops the instance indexing code, which would otherwise walk every
+  collection in a Qdrant it shares with the service.
 
 ## TUI Configuration
 
