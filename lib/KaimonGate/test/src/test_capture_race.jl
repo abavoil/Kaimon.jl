@@ -195,14 +195,15 @@ end
 end
 
 @testset "a cell that loads packages keeps the rest of its output (#96)" begin
+    # Dates is one of KaimonGate's own dependencies, so it loads in any test environment.
     try
-        r = _capture("using Statistics\nwrite(stdout, \"kept line\\n\")\nprintln(\"also kept\")\nmean([1, 2, 3])")
+        r = _capture("using Dates\nwrite(stdout, \"kept line\\n\")\nprintln(\"also kept\")\nyear(Date(2020, 1, 1))")
         @test r.stdout == "kept line\nalso kept\n"
-        @test r.value_repr == "2.0"
+        @test r.value_repr == "2020"
         @test r.exception === nothing
 
         # Errors still name the statement's own line, not the cell's first.
-        r = _capture("using Statistics\nx96 = 1\nerror(\"boom\")")
+        r = _capture("using Dates\nx96 = 1\nerror(\"boom\")")
         @test r.exception !== nothing
         @test occursin("none:3", r.exception)
 
