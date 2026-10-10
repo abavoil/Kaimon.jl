@@ -21,7 +21,8 @@ using Serialization
         nothing, nothing,
         Ref(true),
         nothing,
-        ReentrantLock())
+        ReentrantLock(),
+        Threads.Event(true), Threads.Event(true))
     conn.req_channel = rc
 
     # Fake gate: drain send_q, answer every correlated request with (type=:ok)

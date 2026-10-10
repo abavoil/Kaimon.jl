@@ -767,7 +767,7 @@ end
     c.req_channel = Kaimon.RequestChannel(
         Kaimon.ZMQ.Socket(Kaimon.ZMQ.DEALER), "ipc:///kaimon-test-unused",
         Channel{Tuple{UInt64,Vector{UInt8}}}(1), Dict{UInt64,Channel{Any}}(), ReentrantLock(),
-        Threads.Atomic{UInt64}(0), nothing, nothing, Ref(true), nothing, ReentrantLock())
+        Threads.Atomic{UInt64}(0), nothing, nothing, Ref(true), nothing, ReentrantLock(), Threads.Event(true), Threads.Event(true))
     c.pid = getpid()
     @test Kaimon._gate_callable(c; wait_s = 0)
     c.pid = _dead_pid()

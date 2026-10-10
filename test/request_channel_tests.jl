@@ -67,6 +67,51 @@ using Kaimon
             after = length(getfield(ctx, :sockets))
             @assert after <= before + 2 "ctx.sockets grew per-request: $before -> $after"
 
+            # 3b. no reply is lost while another caller is sending. A send() can take the
+            #     DEALER fd's readability signal for a reply that has just arrived, so a
+            #     reader parked on the fd alone leaves that reply unread until something
+            #     else touches the socket. A fast echo ROUTER and a caller sending
+            #     back-to-back make the collision frequent.
+            let ctx = K.ZMQ.Context(), ep = "ipc://" * joinpath(dir, "echo")
+                router = K.ZMQ.Socket(ctx, K.ZMQ.ROUTER); router.linger = 0; router.rcvtimeo = 5
+                K.ZMQ.bind(router, ep)
+                serving = Ref(true)
+                server = Threads.@spawn while serving[]
+                    parts = try
+                        p = [K.ZMQ.recv(router)]
+                        while router.rcvmore; push!(p, K.ZMQ.recv(router)); end
+                        p
+                    catch e
+                        e isa K.ZMQ.TimeoutError && continue
+                        break
+                    end
+                    K.ZMQ.send(router, parts[1]; more = true); K.ZMQ.send(router, parts[2]; more = true)
+                    K.ZMQ.send(router, UInt8[0x01])
+                end
+                rc = K.RequestChannel(ctx, ep)
+                call() = begin
+                    id = Threads.atomic_add!(rc.counter, UInt64(1)); inbox = Channel{Any}(1)
+                    lock(rc.pending_lock) do; rc.pending[id] = inbox; end
+                    put!(rc.send_q, (id, UInt8[0x02]))
+                    r = K._await_inbox(inbox, time() + 5.0)
+                    lock(rc.pending_lock) do; delete!(rc.pending, id); end
+                    r !== nothing
+                end
+                sending = Ref(true)
+                other = Threads.@spawn while sending[]; call(); end
+                worst, lost = 0.0, 0
+                for _ in 1:20000
+                    t = time(); call() || (lost += 1); worst = max(worst, time() - t)
+                end
+                sending[] = false; wait(other)
+                K._close_request_channel!(rc)
+                serving[] = false; wait(server)
+                close(router); close(ctx)
+                @assert lost == 0 "replies lost under a concurrent sender: $lost"
+                @assert worst < 1.0 "a reply waited $(round(worst; digits = 2))s under a concurrent sender"
+                @assert istaskdone(rc.reader) "the reader did not exit on close"
+            end
+
             # 4. disconnect fails pending callers fast (no hang to timeout).
             slow = Threads.@spawn K.eval_remote(conn, "sleep(30); :done"; timeout_ms = 30000)
             sleep(0.3)
