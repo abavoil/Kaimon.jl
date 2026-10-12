@@ -420,6 +420,21 @@ end
         @test !Kaimon._is_local_tcp(remote_tcp)
     end
 
+    @testset "backtrace signals only a known local pid" begin
+        # Each of these must return before kill(2): a remote pid names another machine's process,
+        # and pid 0 would signal this process's whole group.
+        remote_tcp = Kaimon.REPLConnection(
+            session_id = "tcp-10.0.0.5-9100", endpoint = "tcp://10.0.0.5:9100",
+            spawned_by = "user", pid = Int(getpid()))
+        no_pid = Kaimon.REPLConnection(
+            session_id = "no-pid", endpoint = "ipc:///tmp/no-pid.sock", spawned_by = "user", pid = 0)
+        for conn in (remote_tcp, no_pid)
+            t = time()
+            @test Kaimon.trigger_backtrace(conn) === nothing
+            @test time() - t < 1   # returned up front, not after polling for a backtrace file
+        end
+    end
+
     @testset "Bug 1: PID refreshed from pong (port reuse)" begin
         mgr = Kaimon.ConnectionManager(sock_dir = mktempdir())
         # conn carries a stale (dead predecessor's) PID; a fresh pong reports the
