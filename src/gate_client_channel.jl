@@ -247,12 +247,14 @@ function _rc_sender(rc::RequestChannel)
                     send(rc.dealer, _corr_bytes(corr_id); more = true)
                     send(rc.dealer, payload)
                 end
-                notify(rc.wake)   # the send may have taken the fd's signal for a waiting reply
             catch e
                 # Send failed — fail this caller fast instead of leaving it to
                 # time out; the rest of the queue continues.
                 _rc_route_reply!(rc, corr_id, UInt8[])  # empty → caller sees deser error
                 @debug "RequestChannel send failed" exception = e
+            finally
+                # Any send, including a failed one, may have taken the fd's signal for a waiting reply.
+                notify(rc.wake)
             end
         end
     catch

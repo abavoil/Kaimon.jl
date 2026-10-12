@@ -101,7 +101,9 @@ using Kaimon
                 other = Threads.@spawn while sending[]; call(); end
                 worst, lost = 0.0, 0
                 for _ in 1:20000
-                    t = time(); call() || (lost += 1); worst = max(worst, time() - t)
+                    t = time(); ok = call(); worst = max(worst, time() - t)
+                    # A stranded reply can stall every later call for its full deadline: stop at the first.
+                    ok || (lost += 1; break)
                 end
                 sending[] = false; wait(other)
                 K._close_request_channel!(rc)
