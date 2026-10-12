@@ -71,8 +71,9 @@ using Kaimon
             #     DEALER fd's readability signal for a reply that has just arrived, so a
             #     reader parked on the fd alone leaves that reply unread until something
             #     else touches the socket. A fast echo ROUTER and a caller sending
-            #     back-to-back make the collision frequent.
-            let ctx = K.ZMQ.Context(), ep = "ipc://" * joinpath(dir, "echo")
+            #     back-to-back make the collision frequent. Runs under a watchdog: a stranded
+            #     reply can also leave the reader running, and then close(ctx) blocks for good.
+            t3b = Threads.@spawn let ctx = K.ZMQ.Context(), ep = "ipc://" * joinpath(dir, "echo")
                 router = K.ZMQ.Socket(ctx, K.ZMQ.ROUTER); router.linger = 0; router.rcvtimeo = 5
                 K.ZMQ.bind(router, ep)
                 serving = Ref(true)
@@ -113,6 +114,11 @@ using Kaimon
                 @assert worst < 1.0 "a reply waited $(round(worst; digits = 2))s under a concurrent sender"
                 @assert istaskdone(rc.reader) "the reader did not exit on close"
             end
+            if timedwait(() -> istaskdone(t3b), 120.0) !== :ok
+                println("3b did not finish: a reply was stranded or the reader never exited"); flush(stdout)
+                ccall(:_exit, Cvoid, (Cint,), 1)   # not exit(): atexit hooks would block on the same context
+            end
+            fetch(t3b)
 
             # 4. disconnect fails pending callers fast (no hang to timeout).
             slow = Threads.@spawn K.eval_remote(conn, "sleep(30); :done"; timeout_ms = 30000)
