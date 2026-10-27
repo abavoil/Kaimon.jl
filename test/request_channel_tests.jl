@@ -130,6 +130,10 @@ using Kaimon
             try; K.stop!(mgr); catch; end
             try; KG.stop(); catch; end
         end
+        # End without Julia's C exit hook, as Kaimon's own main does
+        # (_finish_exit_without_runtime_hook): with ZMQ and HTTP threads still live it can deadlock.
+        flush(stdout); flush(stderr)
+        ccall(:_exit, Cvoid, (Cint,), 0)
     """
     path, io = mktemp()
     write(io, script)
