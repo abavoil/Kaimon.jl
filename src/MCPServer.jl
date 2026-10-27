@@ -1193,6 +1193,10 @@ function start_mcp_server(
                 return nothing
             end
 
+            # A request from a client speaking a newer, initialize-less MCP is turned away before a
+            # session is made for it, so it falls back to `initialize`.
+            _stream_modern_request(http, parsed_request) && return nothing
+
             is_initialize =
                 parsed_request !== nothing &&
                 get(parsed_request, "method", "") == "initialize"

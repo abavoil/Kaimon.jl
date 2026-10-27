@@ -87,6 +87,44 @@ end
     end
 end
 
+@testset "Requests in a newer, initialize-less MCP are turned away" begin
+    # MCP 2026-07-28 has no `initialize`: a client that speaks it and the older versions sends a
+    # new-style request first and falls back to `initialize` on a 400 whose error is not one of
+    # 2026-07-28's own (-32020 to -32022).
+    server = Kaimon.start_mcp_server(server_tools, 0)
+    port = server.port
+    sleep(0.1)
+    post(body; headers = String[]) = HTTP.post("http://localhost:$port/",
+        ["Content-Type" => "application/json", headers...], JSON.json(body); status_exception = false)
+    rpc(method; id = 7, meta = nothing) = (p = Dict{String,Any}();
+        meta === nothing || (p["_meta"] = meta);
+        Dict("jsonrpc" => "2.0", "id" => id, "method" => method, "params" => p))
+    # `String(r.body)` empties the byte vector, so each body is read once.
+    reply(r) = (r.status, JSON.parse(String(r.body)))
+    turned_away(r) = ((s, j) = reply(r); s == 400 && j.error.code == -32600)
+    try
+        @test turned_away(post(rpc("tools/list"); headers = ["MCP-Protocol-Version" => "2026-07-28"]))
+        s, j = reply(post(rpc("server/discover"; id = 42)))
+        @test s == 400 && j.error.code == -32600
+        @test j.id == 42
+        @test occursin("initialize", j.error.message)
+        @test turned_away(post(rpc("tools/list";
+            meta = Dict("io.modelcontextprotocol/protocolVersion" => "2026-07-28"))))
+
+        # The versions this server speaks are unaffected, with or without the `_meta` field.
+        @test post(rpc("tools/list";
+            meta = Dict("io.modelcontextprotocol/protocolVersion" => "2025-11-25"))).status == 200
+        @test post(rpc("tools/list")).status == 200
+        init = Dict("jsonrpc" => "2.0", "id" => 1, "method" => "initialize", "params" => Dict(
+            "protocolVersion" => "2025-11-25", "capabilities" => Dict(),
+            "clientInfo" => Dict("name" => "test", "version" => "0")))
+        @test post(init).status == 200
+    finally
+        Kaimon.stop_mcp_server(server)
+        sleep(0.1)
+    end
+end
+
 @testset "Tool Listing" begin
     # Start server for tool listing tests
     server = Kaimon.start_mcp_server(server_tools, 0)
