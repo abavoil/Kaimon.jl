@@ -249,6 +249,42 @@ function _build_julia_cmd(lc::LaunchConfig, script::String; project::String = ""
     return cmd
 end
 
+# Wait for the session's process to exit, then record it, finish its log, and release its terminal.
+function _watch_session_exit!(ms::ManagedSession, pty, log_io; poll::Real = 2.0)
+    while Tachikoma.pty_alive(pty)
+        sleep(poll)
+    end
+    if ms.status in (:starting, :running)
+        ms.status = :crashed
+        _push_session_error!(ms, "Process exited at $(Dates.now())")
+        _push_log!(
+            :warn,
+            "Managed session '$(ms.name)' process exited unexpectedly",
+        )
+    end
+    # Final drain and close log
+    if log_io !== nothing
+        try
+            while isready(pty.output)
+                data = try
+                    take!(pty.output)
+                catch
+                    break
+                end
+                write(log_io, data)
+            end
+            println(log_io, "--- Session $(ms.name) exited at $(Dates.now()) ---")
+        catch
+        end
+        try
+            close(log_io)
+        catch
+        end
+    end
+    # Release its terminal and reap it. Nothing to do if stop_session! already took the PTY.
+    _close_pty!(_take_pty!(ms, pty))
+end
+
 """
     spawn_session!(ms::ManagedSession)
 
@@ -318,39 +354,7 @@ function spawn_session!(ms::ManagedSession)
             end
         end
 
-        # Background task to detect PTY/process exit
-        @async begin
-            while Tachikoma.pty_alive(pty)
-                sleep(2.0)
-            end
-            if ms.status in (:starting, :running)
-                ms.status = :crashed
-                _push_session_error!(ms, "Process exited at $(Dates.now())")
-                _push_log!(
-                    :warn,
-                    "Managed session '$(ms.name)' process exited unexpectedly",
-                )
-            end
-            # Final drain and close log
-            if log_io !== nothing
-                try
-                    while isready(pty.output)
-                        data = try
-                            take!(pty.output)
-                        catch
-                            break
-                        end
-                        write(log_io, data)
-                    end
-                    println(log_io, "--- Session $(ms.name) exited at $(Dates.now()) ---")
-                catch
-                end
-                try
-                    close(log_io)
-                catch
-                end
-            end
-        end
+        @async _watch_session_exit!(ms, pty, log_io)
 
         _push_log!(:info, "Session '$(ms.name)' subprocess spawning (PID=$(Int(pty.child_pid)))")
     catch e
@@ -363,6 +367,28 @@ function spawn_session!(ms::ManagedSession)
     end
 end
 
+# Detach the session's PTY so that exactly one caller closes it. The exit monitor and stop_session!
+# can run on different threads, and a second close(2) could hit an fd number the OS has reused.
+# With `expected`, the PTY is taken only if it is still that one.
+function _take_pty!(ms::ManagedSession, expected = nothing)
+    lock(MANAGED_SESSIONS_LOCK) do
+        pty = ms.pty
+        (pty === nothing || (expected !== nothing && pty !== expected)) && return nothing
+        ms.pty = nothing
+        return pty
+    end
+end
+
+_close_pty!(::Nothing) = nothing
+function _close_pty!(pty)
+    try
+        Tachikoma.pty_close!(pty)
+    catch e
+        _push_log!(:warn, "Closing a session terminal failed: $(sprint(showerror, e))")
+    end
+    return nothing
+end
+
 """
     stop_session!(ms::ManagedSession; timeout::Float64=5.0)
 
@@ -373,14 +399,9 @@ function stop_session!(ms::ManagedSession; timeout::Float64 = 5.0)
     prev_status = ms.status
     ms.status = :stopped
 
-    # PTY-based session
-    if ms.pty !== nothing
-        try
-            Tachikoma.pty_close!(ms.pty)
-        catch
-        end
-        ms.pty = nothing
-    end
+    # PTY-based session: closing the PTY hangs up the child, reaps it, and kills one that outlives the
+    # grace period.
+    _close_pty!(_take_pty!(ms))
 
     # Legacy pipeline-based session
     proc = ms.process
@@ -576,3 +597,57 @@ end
 """True when gate session `key` is private to an agent other than `caller`."""
 private_to_other(key::AbstractString, caller::AbstractString) =
     (o = session_owner(key); !isempty(o) && o != caller)
+
+"""
+    managed_session_for(conn) -> Union{ManagedSession,Nothing}
+
+The managed session behind gate connection `conn`: found by session key, or, for an agent-spawned
+session not yet linked to its key, by process id.
+"""
+function managed_session_for(conn::REPLConnection)
+    ms = find_managed_by_key(short_key(conn))
+    ms !== nothing && return ms
+    (is_agent_spawned(conn) && conn.pid > 0) || return nothing
+    lock(MANAGED_SESSIONS_LOCK) do
+        for m in MANAGED_SESSIONS
+            session_pid(m) == conn.pid && return m
+        end
+        return nothing
+    end
+end
+
+"""
+    shutdown_session!(mgr, conn; exit_wait=5.0) -> Symbol
+
+Shut down gate session `conn`. Asks its gate to exit and removes the connection and its files. If
+Kaimon spawned the process, it is then stopped: given `exit_wait` seconds to exit on its own after an
+acknowledged shutdown, then its terminal is closed, which hangs it up, reaps it, and kills it if it
+outlives the grace period. Its managed record is dropped. Returns `:acknowledged`, `:stalled` (it was
+stalled and did not answer) or `:unacknowledged`.
+"""
+function shutdown_session!(mgr::ConnectionManager, conn::REPLConnection; exit_wait::Real = 5.0)
+    was_stalled = conn.status == :stalled
+    ms = managed_session_for(conn)
+    ok = send_shutdown!(conn)
+    disconnect!(conn)
+    _unregister_session_tools!(conn)
+    lock(mgr.lock) do
+        idx = findfirst(c -> c === conn, mgr.connections)
+        idx !== nothing && deleteat!(mgr.connections, idx)
+    end
+    _remove_session_files(mgr.sock_dir, conn.session_id)
+    _fire_sessions_changed(mgr)
+    if ms !== nothing
+        if ok
+            deadline = time() + exit_wait
+            while (pty = ms.pty) !== nothing && Tachikoma.pty_alive(pty) && time() < deadline
+                sleep(0.1)
+            end
+        end
+        stop_session!(ms)
+        lock(MANAGED_SESSIONS_LOCK) do
+            filter!(m -> m !== ms, MANAGED_SESSIONS)
+        end
+    end
+    return ok ? :acknowledged : was_stalled ? :stalled : :unacknowledged
+end

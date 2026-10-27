@@ -94,6 +94,20 @@ Send a request to the gate over its persistent DEALER and wait up to
 `(ok=true, response=...)` on success, or `(ok=false, error="...")` on
 failure/timeout. Multiple concurrent calls are fully independent.
 """
+# A session Kaimon started recently may answer pings before it can serve requests (packages still
+# loading, Pkg.instantiate running), so a timeout then says so.
+const _STARTING_WINDOW_S = 300.0
+
+function _caller_timeout_message(conn::REPLConnection, caller_timeout)
+    msg = "Caller timeout after $(caller_timeout)s"
+    ms = managed_session_for(conn)
+    ms === nothing && return msg
+    age = time() - ms.started_at
+    (ms.started_at > 0 && age < _STARTING_WINDOW_S) || return msg
+    return msg * ": the session started $(round(Int, age))s ago and has not answered yet; it may still be " *
+        "loading packages. Try again shortly, or check its log if it stays silent."
+end
+
 function _req_send_recv(conn::REPLConnection, request; caller_timeout::Float64 = 10.0)
     rc = conn.req_channel
     if rc === nothing || !rc.alive[] || conn.status ∉ (:connected, :evaluating, :stalled)
@@ -126,7 +140,7 @@ function _req_send_recv(conn::REPLConnection, request; caller_timeout::Float64 =
         raw = _await_inbox(inbox, time() + caller_timeout)
         if raw === nothing
             return rc.alive[] ?
-                   (ok = false, error = "Caller timeout after $(caller_timeout)s") :
+                   (ok = false, error = _caller_timeout_message(conn, caller_timeout)) :
                    (ok = false, error = "Gate disconnected")
         end
         isempty(raw) && return (ok = false, error = "Gate request failed (send error)")

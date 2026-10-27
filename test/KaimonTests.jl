@@ -45,5 +45,6 @@ include("extension_manager_tests.jl")
 include("headless_tty_tests.jl")
 include("send_restart_tests.jl")
 include("private_sessions_tests.jl")
+include("session_teardown_tests.jl")
 
 end # module

@@ -623,28 +623,17 @@ Commands:
             mgr.on_sessions_changed = old_cb
             return "Restart sent to $key but timed out waiting for reconnection (60s). The session may still be starting — try again shortly."
         elseif command == "shutdown"
-            was_stalled = conn.status == :stalled
-            # Best-effort graceful shutdown; a stalled/dead gate may not answer.
-            ok = send_shutdown!(conn)
-            disconnect!(conn)
-            # Force-evict from the registry and clean up its files, so a stalled
-            # session (e.g. a localhost TCP worker whose process already died) can
-            # always be cleared without round-tripping to the dead gate.
-            lock(mgr.lock) do
-                idx = findfirst(c -> c === conn, mgr.connections)
-                if idx !== nothing
-                    _unregister_session_tools!(conn)
-                    deleteat!(mgr.connections, idx)
-                end
-            end
-            _remove_session_files(mgr.sock_dir, conn.session_id)
-            _fire_sessions_changed(mgr)
-            if ok
-                return "Session $key shut down."
-            elseif was_stalled
-                return "Session $key was stalled/unreachable — force-removed from the registry and cleaned up."
+            # Removes the session even when its gate does not answer (stalled, or its process
+            # already died), and stops the process if Kaimon spawned it.
+            spawned = managed_session_for(conn) !== nothing
+            outcome = shutdown_session!(mgr, conn)
+            stopped = spawned ? " Its process was stopped." : ""
+            if outcome === :acknowledged
+                return "Session $key shut down.$stopped"
+            elseif outcome === :stalled
+                return "Session $key was stalled/unreachable — removed from the registry and cleaned up.$stopped"
             else
-                return "Session $key removed from the registry (gate did not acknowledge shutdown)."
+                return "Session $key removed from the registry (gate did not acknowledge shutdown).$stopped"
             end
         else
             return "Error: Invalid command '$command'"
