@@ -50,7 +50,8 @@ using Kaimon
         dir = mktempdir()
         src = joinpath(dir, "src")
         mkpath(src)
-        # Synthetic .cov: '-' = non-executable, a number = coverable (covered if >0).
+        write(joinpath(src, "Foo.jl"), "module Foo\nfoo() = 1\nbar() = 2\nend\n")
+        # Synthetic .cov: '-' = no count, a number = coverable (covered if >0).
         write(joinpath(src, "Foo.jl.12345.cov"), """
                 - module Foo
                 5 foo() = 1
@@ -65,6 +66,44 @@ using Kaimon
 
         # No .cov data → clear message, no crash.
         @test occursin("no .cov data", Kaimon._collect_coverage(mktempdir()))
+    end
+
+    @testset "_collect_coverage counts uncalled functions and unloaded files as not covered" begin
+        dir = mktempdir()
+        src = joinpath(dir, "src")
+        test = joinpath(dir, "test")
+        mkpath(src); mkpath(test)
+        # `g` was never called, so Julia never compiled it and wrote no counts for it.
+        write(joinpath(src, "A.jl"), """
+            module A
+            f(x) = x + 1
+            function g(x)
+                y = x * 2
+                return y
+            end
+            end
+            """)
+        write(joinpath(src, "A.jl.111.cov"), """
+                    - module A
+                    3 f(x) = x + 1
+                    - function g(x)
+                    -     y = x * 2
+                    -     return y
+                    - end
+                    - end
+            """)
+        # No test loaded B.jl, so it has no .cov at all.
+        write(joinpath(src, "B.jl"), "h(x) = x - 1\n")
+        write(joinpath(test, "runtests.jl.111.cov"), "        1 using A\n")
+
+        summary = Kaimon._collect_coverage(dir)
+        m = match(r"Coverage: (\d+)/(\d+) lines", summary)
+        covered, coverable = parse(Int, m[1]), parse(Int, m[2])
+        @test covered == 1
+        @test coverable >= 4          # f, g's body, and B.jl's h are all coverable
+        @test occursin("src/B.jl: 0/", summary)
+        # Every .cov file in the project is removed, test/ included.
+        @test isempty(filter(f -> endswith(f, ".cov"), vcat(readdir(src), readdir(test))))
     end
 
     @testset "_launch_julia_exe resolves the binary sessions and test runs share" begin

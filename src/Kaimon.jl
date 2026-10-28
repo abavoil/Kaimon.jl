@@ -18,6 +18,7 @@ using FileWatching
 using Preferences
 using ZMQ
 import ripgrep_jll   # bundled ripgrep binary backing grep_code (system `rg` is the fallback)
+import CoverageTools # run_tests coverage: the same per-line accounting LocalCoverage/Coverage.jl report
 using CommonMark  # triggers Tachikoma's TachikomaMarkdownExt for markdown rendering
 using Printf
 using UUIDs
