@@ -88,6 +88,18 @@ end
             end
         end)
         @test KaimonGate.get_stash(rid)["k"] == 42
+
+        # Output attribution: _eval_with_capture tags captured (and published)
+        # output with the request id read from the SAME task-local. Without the
+        # forwarding, live output from an mt=true eval was attributed to no
+        # request. Assert both the sink's id and that the line was captured.
+        result3 = fetch(Threads.@spawn :interactive begin
+            task_local_storage(:gate_request_id, rid) do
+                KaimonGate.gate_eval("println(\"attributed line\"); KaimonGate._current_sink().request_id")
+            end
+        end)
+        @test result3.value_repr == "\"$rid\""
+        @test occursin("attributed line", result3.stdout)
     finally
         Base.active_repl = had_repl ? old_repl : nothing
         put!(fb.repl_channel, (nothing, -1))
