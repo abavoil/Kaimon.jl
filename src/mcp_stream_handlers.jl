@@ -397,12 +397,15 @@ function _stream_get_sse(http, req)
                                 wrote = true
                             end
                         end
-                        # Notifications newer than this session's cursor. The cursor
-                        # (shared with POST flushes) advances past what we deliver, so
-                        # a re-queued notification — e.g. tools/list_changed on every
-                        # extension restart — comes through as a fresh, higher seq
-                        # instead of being suppressed for the stream's whole life.
-                        for notif in _flush_notifications_for_session!(sid)
+                        # Notifications newer than this stream's cursor. The cursor
+                        # advances past what we deliver, so a re-queued notification
+                        # (tools/list_changed on every extension restart) comes through
+                        # as a fresh, higher seq instead of being suppressed for the
+                        # stream's whole life. It is this stream's OWN cursor, not the
+                        # POST channel's: a write landing here does not mean the client
+                        # read it, so it must not stop the next POST from carrying it.
+                        for notif in _flush_notifications_for_session!(sid; channel = :stream)
+                            _push_log!(:info, "SSE notification flush (GET stream): $(get(notif, "method", ""))")
                             write(http, "data: $(JSON.json(notif))\n\n")
                             wrote = true
                         end
@@ -416,7 +419,10 @@ function _stream_get_sse(http, req)
                         end
                         sleep(1)
                     end
-                catch
+                catch e
+                    # The client going away ends the stream too; say which it was, since a
+                    # write that failed took notifications with it.
+                    _push_log!(:info, "GET receive stream ended: $(sprint(showerror, e))")
                 finally
                     outbox === nothing || _unregister_session_stream!(sid, outbox)
                 end
