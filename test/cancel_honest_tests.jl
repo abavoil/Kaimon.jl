@@ -1,6 +1,8 @@
 using ReTest
 using Kaimon
 using Kaimon.Database
+using SQLite
+using DBInterface
 
 # ── cancel_eval honesty ──────────────────────────────────────────────────────
 # Regression: cancel_eval used to write status='cancelled' (plus finished_at)
@@ -170,4 +172,48 @@ end
         @test occursin("matches 2 running", resp)
         @test all(id -> Database.get_job(id)["cancelled"] == 0, ids)
     end
+end
+
+@testset "the collector's write records a stopped cancelled job" begin
+    eval_id = "cafe0007"
+    mgr, _ = _cancel_test_fixture(eval_id)
+    with_conn_mgr(mgr) do
+        Kaimon.cancel_eval_tool.handler(Dict("eval_id" => eval_id))
+        @test Database.get_job_stats()["cancelled"] == 0   # pending: not counted
+
+        # What the collector does once the code actually stops.
+        Database.update_job!(eval_id; status = "cancelled", result = "stopped",
+                            finished_at = time())
+        job = Database.get_job(eval_id)
+        @test job["status"] == "cancelled"
+        @test job["result"] == "stopped"
+        @test job["finished_at"] > 0.0
+        @test Database.get_job_stats()["cancelled"] == 1   # stopped: counted
+    end
+end
+
+@testset "cancel_requested_at is added to a pre-existing database" begin
+    # A DB created before the column existed must gain it rather than erroring
+    # on the first cancel_eval.
+    path = tempname() * ".db"
+    db = SQLite.DB(path)
+    DBInterface.execute(db, """CREATE TABLE background_jobs (
+        eval_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, code TEXT NOT NULL,
+        started_at REAL NOT NULL, finished_at REAL DEFAULT 0.0, promoted_at REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running', result TEXT DEFAULT '',
+        result_preview TEXT DEFAULT '', cancelled INTEGER DEFAULT 0)""")
+    DBInterface.execute(db, """INSERT INTO background_jobs
+        (eval_id, session_key, code, started_at, promoted_at, status)
+        VALUES ('cafe0008', 'sess1234', 'x', 0.0, 0.0, 'completed')""")
+    SQLite.close(db)
+
+    Database.init_db!(path)
+    Database.update_job!("cafe0008"; cancelled=true, cancel_requested_at = 123.0)
+    job = Database.get_job("cafe0008")
+    @test job["cancel_requested_at"] == 123.0
+    @test job["cancelled"] == 1
+    @test job["status"] == "completed"   # the request columns are all it touched
+
+    Database.init_db!(path)              # idempotent: no duplicate-column error
+    @test Database.get_job("cafe0008")["cancel_requested_at"] == 123.0
 end
