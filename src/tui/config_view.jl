@@ -239,7 +239,7 @@ function view_config_base(m::KaimonModel, area::Rect, buf::Buffer)
                     lc_x = x + 4 + name_len + 1
                     max_lc_w = rx - length(status_text) - lc_x - 2
                     if max_lc_w > 4
-                        display_lc = length(lc_summary) > max_lc_w ? lc_summary[1:max_lc_w-1] * "…" : lc_summary
+                        display_lc = length(lc_summary) > max_lc_w ? first(lc_summary, max_lc_w - 1) * "…" : lc_summary
                         set_string!(buf, lc_x, y, display_lc, tstyle(:text_dim); max_x=rx)
                     end
                 end

@@ -410,9 +410,10 @@ function _debug_tab_complete!(m::KaimonModel, inp::TextInput)
 
     # Extract the partial identifier at the end of the input (the word being completed)
     # e.g. "length(res" → partial="res", prefix_text="length("
-    ident_start = something(findlast(c -> !Base.is_id_char(c), text), 0) + 1
+    sep = findlast(c -> !Base.is_id_char(c), text)
+    ident_start = sep === nothing ? firstindex(text) : nextind(text, sep)
     partial = text[ident_start:end]
-    prefix_text = text[1:ident_start-1]
+    prefix_text = text[1:prevind(text, ident_start)]
     isempty(partial) && return
 
     # Get completions from the eval module — locals, imports, and macros from

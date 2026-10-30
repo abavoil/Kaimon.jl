@@ -530,11 +530,12 @@ function _parse_summary_line!(run::TestRun, state::_ParserState, line::String)::
         pipe_pos = findfirst('|', line)
         pipe_pos === nothing && return false
 
-        name_part = strip(line[1:pipe_pos-1])
-        values_part = line[pipe_pos+1:end]
+        name_section = line[1:prevind(line, pipe_pos)]
+        name_part = strip(name_section)
+        values_part = line[nextind(line, pipe_pos):end]
 
         # Calculate depth from leading whitespace in the name section
-        leading = length(line[1:pipe_pos-1]) - length(lstrip(line[1:pipe_pos-1]))
+        leading = length(name_section) - length(lstrip(name_section))
         depth = div(leading, 2)  # normalize to levels
 
         # Extract all integers from the values section

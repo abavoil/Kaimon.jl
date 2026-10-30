@@ -151,6 +151,17 @@ using Kaimon:
         delete!(_PARSER_STATES, 102)
     end
 
+    @testset "Summary row whose name ends in a multi-byte character" begin
+        run = TestRun(; id = 103, project_path = "/tmp/test_project")
+        for line in ["Test Summary: | Pass  Total", "limits → ∞| 4      4", ""]
+            parse_test_line!(run, line)
+        end
+        @test length(run.results) == 1
+        @test run.results[1].name == "limits → ∞"
+        @test run.results[1].pass_count == 4
+        delete!(_PARSER_STATES, 103)
+    end
+
     @testset "Structured runner lines" begin
         run = TestRun(; id = 103, project_path = "/tmp/test_project")
 

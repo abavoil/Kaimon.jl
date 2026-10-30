@@ -94,131 +94,12 @@ function drain_stream_messages!(mgr::ConnectionManager)
                 end
                 raw === nothing && break
                 raw === :skip && continue
-                # Raw binary numeric frame — bypass deserialize + all the String-typed routing below
-                # (panel_push / eval-inbox / job_stash / pub_events). Header = [MAGIC|u8 chanLen|chan];
-                # the payload rides straight through as bytes (zero-copy — passed by reference).
-                if raw isa Tuple && @inbounds(raw[1]) === :binframe
-                    hdr = raw[2]::Vector{UInt8}; payload = raw[3]::Vector{UInt8}
-                    clen = length(hdr) >= 2 ? Int(hdr[2]) : 0
-                    ch = length(hdr) >= 2 + clen ? String(@view hdr[3:2+clen]) : "stdout"
-                    dname = isempty(conn.display_name) ? conn.name : conn.display_name
-                    push!(messages, (channel = ch, data = payload, session_name = dname, conn_name = conn.name))
-                    continue
-                end
-                msg = try
-                    _safe_deserialize(raw; label = "debug_stream")
-                catch
-                    continue
-                end
-                ch = string(get(msg, :channel, "stdout"))
-
-                # Panel push: buffer raw data (before stringification) and skip
-                if ch == "panel_push"
-                    raw_data = get(msg, :data, nothing)
-                    skey = short_key(conn)
-                    if raw_data isa NamedTuple && hasfield(typeof(raw_data), :key)
-                        _buffer_panel_push!(skey, string(raw_data.key), raw_data.value)
-                        _push_log!(:info, "panel_push received: key=$(raw_data.key) session=$skey")
-                    else
-                        _push_log!(:warn, "panel_push malformed: session=$skey data=$(repr(raw_data))")
-                    end
-                    continue
-                end
-
-                # Preserve a raw binary frame (a numeric stream buffer) as bytes; everything else stringifies.
-                _rawd = get(msg, :data, "")
-                data = _rawd isa Vector{UInt8} ? _rawd : string(_rawd)
-                msg_request_id = string(get(msg, :request_id, ""))
-
-                # Route eval and tool lifecycle messages to the correct per-request inbox
-                # so concurrent eval_remote_async / _call_session_tool_async callers
-                # each get their own results.
-                routed = false
-                if ch in (
-                    "eval_complete",
-                    "eval_error",
-                    "tool_complete",
-                    "tool_error",
-                    "tool_progress",
-                ) && !isempty(msg_request_id)
-                    inbox = lock(conn._eval_inboxes_lock) do
-                        get(conn._eval_inboxes, msg_request_id, nothing)
-                    end
-                    if inbox !== nothing
-                        try
-                            put!(inbox, (channel = ch, data = data))
-                            routed = true
-                        catch
-                            # Channel full or closed
-                        end
-                    end
-                end
-
-                # Track debug paused state on the connection for fast checks
-                if ch == "breakpoint_hit"
-                    conn.debug_paused = true
-                elseif ch == "breakpoint_resumed"
-                    conn.debug_paused = false
-                end
-
-                # Collect job stash updates into the eval record + update inflight
-                if ch == "job_stash" && !isempty(msg_request_id)
-                    eq_idx = findfirst('=', data)
-                    if eq_idx !== nothing
-                        skey = data[1:eq_idx-1]
-                        sval = data[eq_idx+1:end]
-                        lock(mgr.eval_history_lock) do
-                            for r in mgr.eval_history
-                                if r.eval_id == msg_request_id
-                                    r.stash[skey] = sval
-                                    r.last_update = time()
-                                    break
-                                end
-                            end
-                        end
-                    end
-                    # Update inflight display with latest stash summary
-                    lock(mgr.eval_history_lock) do
-                        for r in mgr.eval_history
-                            if r.eval_id == msg_request_id && !isempty(r.stash)
-                                summary = join(["$k=$v" for (k,v) in sort(collect(r.stash); by=first)], " ")
-                                if length(summary) > 80
-                                    summary = first(summary, 80) * "…"
-                                end
-                                _push_job_progress!(msg_request_id, summary)
-                                break
-                            end
-                        end
-                    end
-                    routed = true
-                end
-
-                # Collect for deferred global PUB re-broadcast (outside mgr.lock). BINARY frames are
-                # skipped — pub_events + its downstream consumers (the TUI observe stream) are String-typed,
-                # and a raw numeric buffer has no place in a text re-broadcast. It still reaches its own
-                # subscriber via `messages` below.
-                dname_for_pub = isempty(conn.display_name) ? conn.name : conn.display_name
-                data isa Vector{UInt8} || push!(pub_events, (ch, data, dname_for_pub))
-
-                if !routed
-                    dname = isempty(conn.display_name) ? conn.name : conn.display_name
-                    push!(messages, (channel = ch, data = data, session_name = dname, conn_name = conn.name))
-                end
-
-                # Forward stdout/stderr/breakpoint_hit to all active inboxes during
-                # streaming so on_output callbacks (SSE progress) can see them.
-                # These aren't tagged with request_id (they come from the REPL's
-                # shared stdout/stderr, or from _breakpoint_hook which doesn't
-                # know which eval triggered it), so broadcast to all.
-                if ch in ("stdout", "stderr", "breakpoint_hit") && conn.eval_state[] == EVAL_STREAMING
-                    lock(conn._eval_inboxes_lock) do
-                        for (_, inbox) in conn._eval_inboxes
-                            try
-                                put!(inbox, (channel = ch, data = data))
-                            catch
-                            end
-                        end
-                    end
+                # A message that fails to route is dropped, not allowed to abort the drain:
+                # this runs on the TUI render loop, so a throw here would end the server.
+                try
+                    _route_stream_message!(mgr, conn, raw, messages, pub_events)
+                catch e
+                    _push_log!(:warn, "Dropped a stream message from $(conn.name): $(sprint(showerror, e))")
                 end
             end
         end
@@ -228,6 +109,144 @@ function drain_stream_messages!(mgr::ConnectionManager)
         _republish_event!(mgr, ch, data, sname)
     end
     return messages
+end
+
+"""Split a `job_stash` payload `"key=value"` at its first `=`; `nothing` when there is none."""
+function _split_stash(data::AbstractString)
+    eq_idx = findfirst('=', data)
+    eq_idx === nothing && return nothing
+    return (String(data[1:prevind(data, eq_idx)]), String(data[nextind(data, eq_idx):end]))
+end
+
+"""Route one decoded stream frame from `conn`: per-request inboxes, debug state, job stash
+updates, and the `messages`/`pub_events` collections [`drain_stream_messages!`](@ref) returns."""
+function _route_stream_message!(mgr::ConnectionManager, conn, raw, messages, pub_events)
+    # Raw binary numeric frame — bypass deserialize + all the String-typed routing below
+    # (panel_push / eval-inbox / job_stash / pub_events). Header = [MAGIC|u8 chanLen|chan];
+    # the payload rides straight through as bytes (zero-copy — passed by reference).
+    if raw isa Tuple && @inbounds(raw[1]) === :binframe
+        hdr = raw[2]::Vector{UInt8}; payload = raw[3]::Vector{UInt8}
+        clen = length(hdr) >= 2 ? Int(hdr[2]) : 0
+        ch = length(hdr) >= 2 + clen ? String(@view hdr[3:2+clen]) : "stdout"
+        dname = isempty(conn.display_name) ? conn.name : conn.display_name
+        push!(messages, (channel = ch, data = payload, session_name = dname, conn_name = conn.name))
+        return nothing
+    end
+    msg = try
+        _safe_deserialize(raw; label = "debug_stream")
+    catch
+        return nothing
+    end
+    ch = string(get(msg, :channel, "stdout"))
+
+    # Panel push: buffer raw data (before stringification) and skip
+    if ch == "panel_push"
+        raw_data = get(msg, :data, nothing)
+        skey = short_key(conn)
+        if raw_data isa NamedTuple && hasfield(typeof(raw_data), :key)
+            _buffer_panel_push!(skey, string(raw_data.key), raw_data.value)
+            _push_log!(:info, "panel_push received: key=$(raw_data.key) session=$skey")
+        else
+            _push_log!(:warn, "panel_push malformed: session=$skey data=$(repr(raw_data))")
+        end
+        return nothing
+    end
+
+    # Preserve a raw binary frame (a numeric stream buffer) as bytes; everything else stringifies.
+    _rawd = get(msg, :data, "")
+    data = _rawd isa Vector{UInt8} ? _rawd : string(_rawd)
+    msg_request_id = string(get(msg, :request_id, ""))
+
+    # Route eval and tool lifecycle messages to the correct per-request inbox
+    # so concurrent eval_remote_async / _call_session_tool_async callers
+    # each get their own results.
+    routed = false
+    if ch in (
+        "eval_complete",
+        "eval_error",
+        "tool_complete",
+        "tool_error",
+        "tool_progress",
+    ) && !isempty(msg_request_id)
+        inbox = lock(conn._eval_inboxes_lock) do
+            get(conn._eval_inboxes, msg_request_id, nothing)
+        end
+        if inbox !== nothing
+            try
+                put!(inbox, (channel = ch, data = data))
+                routed = true
+            catch
+                # Channel full or closed
+            end
+        end
+    end
+
+    # Track debug paused state on the connection for fast checks
+    if ch == "breakpoint_hit"
+        conn.debug_paused = true
+    elseif ch == "breakpoint_resumed"
+        conn.debug_paused = false
+    end
+
+    # Collect job stash updates into the eval record + update inflight
+    if ch == "job_stash" && !isempty(msg_request_id)
+        kv = _split_stash(data)
+        if kv !== nothing
+            skey, sval = kv
+            lock(mgr.eval_history_lock) do
+                for r in mgr.eval_history
+                    if r.eval_id == msg_request_id
+                        r.stash[skey] = sval
+                        r.last_update = time()
+                        break
+                    end
+                end
+            end
+        end
+        # Update inflight display with latest stash summary
+        lock(mgr.eval_history_lock) do
+            for r in mgr.eval_history
+                if r.eval_id == msg_request_id && !isempty(r.stash)
+                    summary = join(["$k=$v" for (k,v) in sort(collect(r.stash); by=first)], " ")
+                    if length(summary) > 80
+                        summary = first(summary, 80) * "…"
+                    end
+                    _push_job_progress!(msg_request_id, summary)
+                    break
+                end
+            end
+        end
+        routed = true
+    end
+
+    # Collect for deferred global PUB re-broadcast (outside mgr.lock). BINARY frames are
+    # skipped — pub_events + its downstream consumers (the TUI observe stream) are String-typed,
+    # and a raw numeric buffer has no place in a text re-broadcast. It still reaches its own
+    # subscriber via `messages` below.
+    dname_for_pub = isempty(conn.display_name) ? conn.name : conn.display_name
+    data isa Vector{UInt8} || push!(pub_events, (ch, data, dname_for_pub))
+
+    if !routed
+        dname = isempty(conn.display_name) ? conn.name : conn.display_name
+        push!(messages, (channel = ch, data = data, session_name = dname, conn_name = conn.name))
+    end
+
+    # Forward stdout/stderr/breakpoint_hit to all active inboxes during
+    # streaming so on_output callbacks (SSE progress) can see them.
+    # These aren't tagged with request_id (they come from the REPL's
+    # shared stdout/stderr, or from _breakpoint_hook which doesn't
+    # know which eval triggered it), so broadcast to all.
+    if ch in ("stdout", "stderr", "breakpoint_hit") && conn.eval_state[] == EVAL_STREAMING
+        lock(conn._eval_inboxes_lock) do
+            for (_, inbox) in conn._eval_inboxes
+                try
+                    put!(inbox, (channel = ch, data = data))
+                catch
+                end
+            end
+        end
+    end
+    return nothing
 end
 
 """
