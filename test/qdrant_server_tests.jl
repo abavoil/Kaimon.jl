@@ -188,3 +188,24 @@ end
         end
     end
 end
+
+@testset "Managed Qdrant startup wait" begin
+    never = () -> false
+    always = () -> true
+    # Healthy on the first poll.
+    @test K._await_qdrant_healthy(always, always, () -> 0; timeout = 1, max_wait = 5) === :healthy
+    # The child exiting ends the wait at once.
+    @test K._await_qdrant_healthy(never, never, () -> 0; timeout = 5, max_wait = 5) === :exited
+    # No log growth for `timeout` seconds.
+    @test K._await_qdrant_healthy(never, always, () -> 0;
+        timeout = 0.2, max_wait = 5, interval = 0.02) === :stalled
+    # A growing log keeps the wait going past `timeout` until it turns healthy.
+    n = Ref(0)
+    ping = () -> (n[] += 1; n[] > 30)
+    @test K._await_qdrant_healthy(ping, always, () -> n[];
+        timeout = 0.1, max_wait = 5, interval = 0.01) === :healthy
+    # ...but never past `max_wait`.
+    m = Ref(0)
+    @test K._await_qdrant_healthy(never, always, () -> (m[] += 1);
+        timeout = 0.1, max_wait = 0.3, interval = 0.01) === :max_wait
+end

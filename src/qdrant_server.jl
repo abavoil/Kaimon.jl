@@ -103,6 +103,9 @@ qdrant_storage_dir() = mkpath(joinpath(kaimon_cache_dir(), "qdrant", "storage"))
 """Path to the managed Qdrant's log file (stdout+stderr)."""
 qdrant_log_path() = joinpath(mkpath(joinpath(kaimon_cache_dir(), "qdrant")), "qdrant.log")
 
+"""Size past which the managed Qdrant log is rotated to `qdrant.log.1` at spawn."""
+const _QDRANT_LOG_ROTATE_BYTES = 32 * 1024^2
+
 """The HTTP port the managed Qdrant should bind, parsed from the configured URL (default 6333)."""
 function _qdrant_http_port()::Int
     m = match(r":(\d+)(?:/|$)", QdrantClient.QDRANT_URL[])
@@ -174,6 +177,8 @@ function _spawn_managed_qdrant(; storage_path::String, http_port::Int, log_path:
     env["QDRANT__TELEMETRY_DISABLED"] = "true"
     # `qdrant()` was defined by a just-loaded module — reach it past the current world.
     qdrant_cmd = Base.invokelatest(mod.qdrant)::Cmd
+    # Qdrant logs every request, so keep one previous log rather than appending forever.
+    filesize(log_path) > _QDRANT_LOG_ROTATE_BYTES && mv(log_path, log_path * ".1"; force = true)
     logio = open(log_path, "a")
     # Run with the cache dir as the working directory. Qdrant writes a
     # `.qdrant-initialized` marker (and any other cwd-relative files) into its
@@ -263,7 +268,7 @@ function managed_qdrant_running()::Bool
 end
 
 """
-    ensure_qdrant!(; timeout=30.0) -> Bool
+    ensure_qdrant!(; timeout=30.0, max_wait=600.0) -> Bool
 
 Make a Qdrant endpoint available, returning `true` if one is reachable by the
 time we return.
@@ -272,12 +277,13 @@ Fast path: if `QdrantClient.ping()` already succeeds, return immediately — thi
 covers Docker, a remote instance, or a child we launched earlier.
 
 Otherwise, if managed mode is on and the binary is installed, load it (if needed),
-spawn a child bound to the configured port, and poll `/healthz` until ready (up to
-`timeout`). Idempotent and thread-safe: concurrent callers are serialized and only
+spawn a child bound to the configured port, and poll until ready: `timeout` seconds
+without startup progress in its log, or `max_wait` in total (see
+[`_await_qdrant_healthy`](@ref)). Idempotent and thread-safe: concurrent callers are serialized and only
 one child is ever spawned. Returns `false` (without spawning) when mode is `:off`
 or the binary isn't installed.
 """
-function ensure_qdrant!(; timeout::Real = 30.0)::Bool
+function ensure_qdrant!(; timeout::Real = 30.0, max_wait::Real = 600.0)::Bool
     QdrantClient.ping() && return true
 
     mode = qdrant_managed_mode()
@@ -309,19 +315,47 @@ function ensure_qdrant!(; timeout::Real = 30.0)::Bool
             end
         end
 
-        deadline = time() + Float64(timeout)
-        while time() < deadline
-            QdrantClient.ping() && return true
-            if !_qdrant_child_alive()
-                @error "Managed Qdrant exited before becoming healthy; see log" log =
-                    qdrant_log_path()
-                return false
-            end
-            sleep(0.25)
+        log = qdrant_log_path()
+        outcome = _await_qdrant_healthy(QdrantClient.ping, _qdrant_child_alive,
+            () -> filesize(log); timeout, max_wait)
+        outcome === :healthy && return true
+        if outcome === :exited
+            @error "Managed Qdrant exited before becoming healthy; see log" log
+        elseif outcome === :stalled
+            @error "Managed Qdrant made no startup progress for $(timeout)s" log
+        else
+            @error "Managed Qdrant did not become healthy within $(max_wait)s" log
         end
-        @error "Managed Qdrant did not become healthy within $(timeout)s" log =
-            qdrant_log_path()
         return false
+    end
+end
+
+"""
+    _await_qdrant_healthy(ping, alive, progress; timeout, max_wait, interval=0.25) -> Symbol
+
+Poll `ping()` until it succeeds (`:healthy`). Qdrant's startup time grows with the
+number of collections it loads, and it logs each one, so `progress()` (the log size)
+changing resets the `timeout`. Gives up with `:stalled` after `timeout` seconds without
+progress, `:max_wait` after `max_wait` seconds in total, or `:exited` once `alive()` is
+false.
+"""
+function _await_qdrant_healthy(ping, alive, progress; timeout::Real, max_wait::Real,
+                               interval::Real = 0.25)
+    started = time()
+    last_progress = started
+    last_seen = progress()
+    while true
+        ping() && return :healthy
+        alive() || return :exited
+        now_t = time()
+        seen = progress()
+        if seen != last_seen
+            last_seen = seen
+            last_progress = now_t
+        end
+        now_t - started >= max_wait && return :max_wait
+        now_t - last_progress >= timeout && return :stalled
+        sleep(interval)
     end
 end
 
