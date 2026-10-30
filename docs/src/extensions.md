@@ -231,6 +231,8 @@ The `tools_function` receives the `GateTool` type as its argument and returns a 
 ```julia
 module MyExtension
 
+import KaimonGate   # declared in the extension's Project.toml [deps]
+
 export create_tools, on_shutdown
 
 function create_tools(GateTool::Type)
@@ -242,7 +244,7 @@ function create_tools(GateTool::Type)
     function greet(name::String, enthusiastic::Bool = false)::String
         msg = enthusiastic ? "Hello, $(name)! 🎉" : "Hello, $(name)."
         # Push state to TUI panel (see "TUI Panel Protocol" below)
-        Main.Kaimon.KaimonGate.push_panel("last_greeting", msg)
+        KaimonGate.push_panel("last_greeting", msg)
         return msg
     end
 
@@ -265,16 +267,16 @@ Add the extension through the TUI Extensions tab (`a` key) or add an entry to `~
 Extensions can call back into Kaimon's MCP tools via the service endpoint:
 
 ```julia
-# In a tool handler (Kaimon is loaded at Main scope in the extension subprocess):
+# In a tool handler:
 
 # Call any registered MCP tool
-result = Main.Kaimon.KaimonGate.call_tool(:search_code, Dict{String,Any}(
+result = KaimonGate.call_tool(:search_code, Dict{String,Any}(
     "query" => "HTTP routing",
     "limit" => "5",
 ))
 
 # Discover available tools
-tools = Main.Kaimon.KaimonGate.list_tools()
+tools = KaimonGate.list_tools()
 ```
 
 This uses a ZMQ REQ/REP connection to the Kaimon server's service socket, allowing extensions to compose with built-in tools and other extensions.
@@ -334,11 +336,11 @@ end
 Instead of polling the extension process with `ctx.eval()`, tool handlers can push state updates to the TUI panel in real time:
 
 ```julia
-# In your tool handler (runs in the extension subprocess):
-Main.Kaimon.KaimonGate.push_panel("key", value)
+# In your tool handler:
+KaimonGate.push_panel("key", value)
 
 # Batch form:
-Main.Kaimon.KaimonGate.push_panel("greetings" => greetings, "status" => "ready")
+KaimonGate.push_panel("greetings" => greetings, "status" => "ready")
 ```
 
 Values can be any serializable Julia type — strings, numbers, vectors, dicts, etc. They're delivered via ZMQ PUB/SUB with no blocking.
@@ -355,8 +357,8 @@ function update!(state, ctx)
 end
 ```
 
-!!! note "Use `Main.Kaimon.KaimonGate`"
-    Extension modules run in their own namespace. Since `Kaimon` is loaded at `Main` scope in the extension subprocess, you must use `Main.Kaimon.KaimonGate.push_panel()` — not just `KaimonGate.push_panel()`.
+!!! note "Declare `KaimonGate` as a dependency"
+    List `KaimonGate` under `[deps]` in the extension's `Project.toml` and `import KaimonGate` in its module. It resolves to the same KaimonGate the extension process serves from.
 
 !!! note "Copy mutable values"
     Always `copy()` mutable values before pushing: `push_panel("data", copy(vec))`. The value is serialized asynchronously, and the original may be mutated before serialization completes.

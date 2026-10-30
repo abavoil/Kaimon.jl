@@ -11,6 +11,8 @@
 
 module HelloExtension
 
+import KaimonGate
+
 export create_tools, on_shutdown
 
 # Module-level state vectors. Tool handlers append here, then push snapshots
@@ -39,12 +41,9 @@ function create_tools(GateTool::Type)
             "Hello, $(name)! 🎉 Welcome to Kaimon extensions!" :
             "Hello, $(name)."
         push!(GREETINGS, msg)
-        # Push a snapshot to the TUI panel. Must use Main.Kaimon.KaimonGate because
-        # this module runs inside the extension subprocess where Kaimon is
-        # loaded at Main scope, not inside this module's namespace.
-        # copy() is required — push_panel serializes the value across ZMQ,
-        # and the original vector may be mutated before serialization completes.
-        Main.Kaimon.KaimonKaimonGate.push_panel("greetings", copy(GREETINGS))
+        # Push a snapshot to the TUI panel. copy() is required: push_panel serializes
+        # the value across ZMQ, and the vector may be mutated before that completes.
+        KaimonGate.push_panel("greetings", copy(GREETINGS))
         return msg
     end
 
@@ -57,7 +56,7 @@ function create_tools(GateTool::Type)
         result = rand(1:sides)
         msg = "🎲 Rolled a $result (d$sides)"
         push!(ROLLS, msg)
-        Main.Kaimon.KaimonKaimonGate.push_panel("rolls", copy(ROLLS))
+        KaimonGate.push_panel("rolls", copy(ROLLS))
         return msg
     end
 

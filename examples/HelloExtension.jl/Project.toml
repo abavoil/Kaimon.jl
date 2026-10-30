@@ -1,3 +1,12 @@
 name = "HelloExtension"
 uuid = "b8e3f1a2-4c7d-4e8f-9a1b-2c3d4e5f6a7b"
 version = "0.1.0"
+
+[deps]
+KaimonGate = "5ee84a8c-75bd-412f-a7b8-4e6463aa635f"
+
+[sources]
+KaimonGate = {path = "../../lib/KaimonGate"}
+
+[compat]
+KaimonGate = "1.5"
