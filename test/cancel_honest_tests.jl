@@ -93,3 +93,81 @@ end
     @test Kaimon._job_terminal_status(mgr, eval_id, false) == :cancelled
     @test Kaimon._job_terminal_status(mgr, eval_id, true) == :cancelled
 end
+
+@testset "cancel_eval leaves a finished job alone" begin
+    eval_id = "cafe0005"
+    mgr, rec = _cancel_test_fixture(eval_id)
+    Kaimon._record_eval_done!(mgr, eval_id, :completed, "done")
+    Database.update_job!(eval_id; status = "completed", result = "done", finished_at = time())
+    with_conn_mgr(mgr) do
+        resp = string(Kaimon.cancel_eval_tool.handler(Dict("eval_id" => eval_id)))
+        @test occursin("already completed", resp)
+        @test rec.cancel_requested_at == 0.0
+        @test rec.status == :completed
+        job = Database.get_job(eval_id)
+        @test job["status"] == "completed"
+        @test job["cancelled"] == 0
+        @test job["cancel_requested_at"] == 0.0
+        @test Database.get_job_stats()["cancelled"] == 0
+    end
+end
+
+@testset "cancel_eval leaves a finished job alone (DB only)" begin
+    eval_id = "cafe0006"
+    mgr, _ = _cancel_test_fixture(eval_id)
+    empty!(mgr.eval_history)   # a job from a previous session: only its row is known
+    Database.update_job!(eval_id; status = "completed", finished_at = time())
+    with_conn_mgr(mgr) do
+        resp = string(Kaimon.cancel_eval_tool.handler(Dict("eval_id" => eval_id)))
+        @test occursin("already completed", resp)
+        @test Database.get_job(eval_id)["cancelled"] == 0
+
+        resp = string(Kaimon.cancel_eval_tool.handler(Dict("eval_id" => "cafe9999")))
+        @test occursin("No running job matching", resp)
+    end
+end
+
+@testset "cancel by prefix uses the full id" begin
+    eval_id = "cafe0abc"
+    mgr, rec = _cancel_test_fixture(eval_id)
+    with_conn_mgr(mgr) do
+        resp = string(Kaimon.cancel_eval_tool.handler(Dict("eval_id" => "cafe0a")))
+        @test occursin("Cancellation requested for $eval_id", resp)
+        @test rec.cancel_requested_at > 0.0
+        job = Database.get_job(eval_id)
+        @test job["cancelled"] == 1
+        @test job["cancel_requested_at"] > 0.0
+    end
+end
+
+@testset "cancel refuses an ambiguous prefix" begin
+    Database.init_db!(tempname() * ".db")
+    mgr = Kaimon.ConnectionManager(sock_dir = tempdir())
+    ids = ["cafe0a01", "cafe0a02"]
+    for id in ids
+        Database.persist_job!(id, "sess1234", _CANCEL_TEST_CODE, time(), time())
+        push!(mgr.eval_history, Kaimon.EvalRecord(id, "sess1234", _CANCEL_TEST_CODE,
+                                                  time(), 0.0, 0.0, time(), :promoted,
+                                                  "", "", true, Dict{String, String}()))
+    end
+    with_conn_mgr(mgr) do
+        resp = string(Kaimon.cancel_eval_tool.handler(Dict("eval_id" => "cafe0a")))
+        @test occursin("matches 2 running", resp)
+        @test all(r -> r.cancel_requested_at == 0.0, mgr.eval_history)
+        @test all(id -> Database.get_job(id)["cancelled"] == 0, ids)
+    end
+end
+
+@testset "cancel refuses an ambiguous prefix (DB only)" begin
+    Database.init_db!(tempname() * ".db")
+    mgr = Kaimon.ConnectionManager(sock_dir = tempdir())
+    ids = ["cafe0b01", "cafe0b02"]
+    for id in ids
+        Database.persist_job!(id, "sess1234", _CANCEL_TEST_CODE, time(), time())
+    end
+    with_conn_mgr(mgr) do
+        resp = string(Kaimon.cancel_eval_tool.handler(Dict("eval_id" => "cafe0b")))
+        @test occursin("matches 2 running", resp)
+        @test all(id -> Database.get_job(id)["cancelled"] == 0, ids)
+    end
+end

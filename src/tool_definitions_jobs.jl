@@ -130,29 +130,70 @@ the running code must check `KaimonGate.is_cancelled()` periodically.""",
         eval_id = get(args, "eval_id", "")
         isempty(eval_id) && return "Error: eval_id is required."
 
-        # Find the session key and notify the gate process
-        session_key = ""
+        # Resolve the typed id (a prefix is allowed) to the FULL id of exactly
+        # one running job — the :cancel_job request and the DB update are both
+        # keyed by it, so a short prefix must not be forwarded as typed.
         mgr = GATE_CONN_MGR[]
+        matches = String[]
+        session_key = ""
+        full_id = ""
+        requested_at = time()
         if mgr !== nothing
             lock(mgr.eval_history_lock) do
                 for r in mgr.eval_history
-                    if startswith(r.eval_id, eval_id) && r.status in (:running, :promoted)
-                        r.cancel_requested_at = time()
-                        session_key = r.session_key
+                    startswith(r.eval_id, eval_id) && r.status in (:running, :promoted) &&
+                        push!(matches, r.eval_id)
+                end
+                if length(matches) == 1
+                    for r in mgr.eval_history
+                        if r.eval_id == matches[1]
+                            r.cancel_requested_at = requested_at
+                            session_key = r.session_key
+                            break
+                        end
                     end
                 end
             end
+        end
+        if length(matches) > 1
+            return "Error: '$(eval_id)' matches $(length(matches)) running jobs " *
+                   "($(join(matches, ", "))); use a longer id."
+        end
 
-            # Send cancel to the gate session so KaimonGate.is_cancelled() returns true
-            if !isempty(session_key)
-                conn = get_connection_by_key(mgr, session_key)
-                if conn !== nothing
-                    try
-                        _req_send_recv(conn,
-                            (type = :cancel_job, eval_id = eval_id);
-                            caller_timeout = 5.0)
-                    catch
-                    end
+        if length(matches) == 1
+            full_id = matches[1]
+        else
+            # Not running in this session's history: the job may belong to a
+            # previous one. Only a row still marked 'running' can be cancelled —
+            # never re-stamp a completed/failed/cancelled/lost job — and an
+            # ambiguous prefix is refused here too.
+            running_rows = filter(j -> startswith(string(get(j, "eval_id", "")), eval_id),
+                                  Database.list_jobs(; status = "running", limit = 50))
+            if length(running_rows) > 1
+                ids = join([string(get(j, "eval_id", "")) for j in running_rows], ", ")
+                return "Error: '$(eval_id)' matches $(length(running_rows)) running jobs " *
+                       "($(ids)); use a longer id."
+            end
+            if length(running_rows) == 1
+                full_id = string(get(running_rows[1], "eval_id", eval_id))
+                session_key = string(get(running_rows[1], "session_key", ""))
+            else
+                job = Database.get_job(eval_id)
+                job === nothing && return "No running job matching '$(eval_id)'."
+                return "Job $(get(job, "eval_id", eval_id)) already $(string(get(job, "status", "")))."
+            end
+        end
+
+        # Send cancel to the gate session so KaimonGate.is_cancelled() returns
+        # true — cancel_job! is keyed by the full request id.
+        if mgr !== nothing && !isempty(session_key)
+            conn = get_connection_by_key(mgr, session_key)
+            if conn !== nothing
+                try
+                    _req_send_recv(conn,
+                        (type = :cancel_job, eval_id = full_id);
+                        caller_timeout = 5.0)
+                catch
                 end
             end
         end
@@ -161,9 +202,9 @@ the running code must check `KaimonGate.is_cancelled()` periodically.""",
         # restart reconciliation still finds it) and stays un-finished until the
         # code actually stops — the collector then records 'cancelled' with the
         # result. `cancelled` + `cancel_requested_at` carry the request itself.
-        Database.update_job!(eval_id; cancelled=true, cancel_requested_at=time())
+        Database.update_job!(full_id; cancelled=true, cancel_requested_at=requested_at)
 
-        "Cancellation requested for $eval_id. Running code can check KaimonGate.is_cancelled() to stop cooperatively; the job is recorded as cancelled once it actually stops."
+        "Cancellation requested for $full_id. Running code can check KaimonGate.is_cancelled() to stop cooperatively; the job is recorded as cancelled once it actually stops."
     end
 )
 

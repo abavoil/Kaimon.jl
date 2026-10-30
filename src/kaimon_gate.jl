@@ -922,10 +922,14 @@ function execute_via_gate_streaming(
                     _push_job_progress!(eval_id,
                         "$(icon) $status after $(elapsed)s")
                     _finish_job_inflight!(eval_id)
-                    _push_activity!(status == :completed ? :job_completed : :job_failed,
+                    # A stop the user asked for is its own outcome, not a failure.
+                    kind = status == :completed ? :job_completed :
+                           status == :cancelled ? :job_cancelled : :job_failed
+                    _push_activity!(kind,
                         "ex", dname,
                         "$(icon) Job $eval_id $status after $(elapsed)s";
-                        success = status == :completed)
+                        # A requested stop is not a failure; the kind carries it.
+                        success = status != :failed)
                 end
             catch e
                 err_msg = sprint(showerror, e)
@@ -935,8 +939,10 @@ function execute_via_gate_streaming(
                     status = string(status), result = err_msg,
                     result_preview = first(err_msg, 500), finished_at = time())
                 _finish_job_inflight!(eval_id)
-                _push_activity!(:job_failed, "ex", dname,
-                    "✗ Job $eval_id $(status): $(first(err_msg, 80))"; success = false)
+                _push_activity!(status == :cancelled ? :job_cancelled : :job_failed,
+                    "ex", dname,
+                    "$(status == :cancelled ? "⊘" : "✗") Job $eval_id $(status): $(first(err_msg, 80))";
+                    success = status != :failed)
             end
         end
 
