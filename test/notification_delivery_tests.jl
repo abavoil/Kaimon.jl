@@ -58,6 +58,10 @@ end
 # The GET loop polls the board once a second.
 _nd_tick() = sleep(2.5)
 
+# Reap every session. Session activity is stamped to the millisecond and the reaper keeps a
+# session active at its cutoff, so an idle limit of 0 can spare one used a moment ago.
+_nd_reap_all!() = Kaimon._reap_stale_sessions!(-1.0)
+
 @testset "tools/list_changed reaches the client" begin
     saved_gate_mode = Kaimon.GATE_MODE[]
     saved_server = Kaimon.SERVER[]
@@ -88,7 +92,7 @@ _nd_tick() = sleep(2.5)
             sid = _nd_session(url)
             s = _nd_get_stream(url, sid; read = false)
             push!(streams, s)
-            Kaimon._reap_stale_sessions!(0.0)
+            _nd_reap_all!()
             @test !haskey(Kaimon.STANDALONE_SESSIONS, sid)
             _nd_call(url, sid)   # the client comes back under its old id
             Kaimon._register_dynamic_tools!([_nd_tool("nd_c")])
@@ -99,7 +103,8 @@ _nd_tick() = sleep(2.5)
         @testset "C': a session the server forgot gets the board again when it returns" begin
             sid = _nd_session(url)
             @test !_nd_list_changed(_nd_call(url, sid))   # drained: nothing new for it
-            Kaimon._reap_stale_sessions!(0.0)
+            _nd_reap_all!()
+            @test !haskey(Kaimon.STANDALONE_SESSIONS, sid)
             # Nothing changed, but the server cannot know what the client missed while it was
             # forgotten, so its first request back replays the board. A repeat is harmless.
             @test _nd_list_changed(_nd_call(url, sid))
